@@ -785,23 +785,47 @@ EncryptionAuditLog
 
 ---
 
-## 10. 技术选型(待讨论)
+## 10. 技术选型
 
-| 项 | 候选 | 倾向 | 备注 |
-|----|------|------|------|
-| 后端 | Node.js / Python / Go | 待定 | 看你熟悉哪个 |
-| 数据库 | Postgres + Redis | 待定 | 需要时间序列、模糊匹配 |
-| 前端 | React / Vue / Svelte | 待定 | 看你偏好 |
-| 国际化 | i18next / react-intl | 待定 | 中英双语 |
-| 部署 | Vercel / 自托管 | 待定 | 看规模 |
-| 搜索 | Postgres FTS / Meilisearch | 待定 | 初期 Postgres 够用 |
-| 支付 | Stripe / 支付宝 / 微信 | 待定 | 会员付费 |
-| **KMS** | 阿里云 KMS / AWS KMS / HashiCorp Vault | 待定 | 密钥管理 |
-| **加密库** | libsodium / node:crypto / cryptography(Python) | 待定 | 看后端 |
-| **审计日志** | 自建 + Sentry / Datadog | 待定 | 异常访问告警 |
-| **依赖扫描** | npm audit / pip-audit / Snyk | 待定 | 每周扫描 |
+### 10.1 已确定(v1.0)
 
-> **先定后端 + DB + 支付**,前端/部署可以晚一轮决定。
+| 项 | 选型 | 备注 |
+|----|------|------|
+| **后端** | **Rust** | 用户确定 |
+| **数据库** | **PostgreSQL** | 用户确定 |
+| **搜索引擎** | **Postgres FTS** | 用户确定(初期够用) |
+| **前端** | **React** | 用户确定 |
+
+### 10.2 仍待讨论
+
+| 项 | 候选 | 备注 |
+|----|------|------|
+| Rust Web 框架 | actix-web / axum / rocket | 看性能/异步需求 |
+| Rust ORM | sqlx / diesel / sea-orm | 看迁移/类型推导偏好 |
+| Rust 加密库 | `aes-gcm` crate / `ring` / `libsodium-sys` | 见 G-8 |
+| 前端状态 | Redux Toolkit / Zustand / Jotai | 看复杂度 |
+| 前端构建 | Vite / Next.js | 看 SSR 需求(可能不需要) |
+| 国际化 | react-i18next / react-intl | 中英双语 |
+| 部署 | Vercel / 自托管(Docker) / Cloudflare | 看规模 + 成本 |
+| 支付 | Stripe / 支付宝 / 微信 | 会员付费(海外/国内) |
+| **KMS** | 阿里云 KMS / AWS KMS / HashiCorp Vault | 见 G-9 |
+| **审计日志** | 自建 + Sentry / Datadog | 异常访问告警 |
+| **依赖扫描** | `cargo audit` + npm audit | 每周扫描 |
+
+### 10.3 Rust + PostgreSQL 技术栈要点
+
+- **Rust Web**:actix-web 或 axum(异步 + 高并发)
+- **Postgres 客户端**:`sqlx`(编译时 SQL 校验,无运行时反射)或 `diesel`(类型安全 ORM)
+- **加密 crate**:
+  - AES-256-GCM:`aes-gcm` 或 `ring`
+  - HMAC-SHA256:`hmac` + `sha2`
+  - Argon2id:`argon2`
+  - TLS:`rustls`
+- **数据库迁移**:`sqlx migrate` 或 `diesel migrations`
+- **监控**:`tracing` + `tracing-subscriber`(结构化日志)
+- **错误处理**:`thiserror`(库)+ `anyhow`(应用)
+
+> **关键**:Rust 类型系统 + 编译时 SQL 校验(`sqlx`)能提前捕获大量错误,适合金融/隐私敏感系统。
 
 ---
 
@@ -812,12 +836,31 @@ EncryptionAuditLog
   - ✅ 敏感信息处理与加密制度(§7.9)
   - ✅ 导师匿名系统无关化名 + k-匿名(§7.10)
   - ⏳ 数据模型细化(已标注加密字段)
-- **M1 — MVP 后端**
-  - 账号注册(邮箱 + 学科 + 学校,带加密)
-  - 导师创建请求(任意名 + 学科 + 学院 → 审核 → 化名生成)
-  - 评分 CRUD(含覆盖链 + 附加信息)
-  - 聚合 API
-  - 登录墙 + 会员墙
+- **M1 — MVP 后端(Rust + PostgreSQL)**
+  - **基础设施**:
+    - Rust 项目脚手架(`cargo init` + 依赖:`actix-web`/`axum`, `sqlx`, `aes-gcm`, `argon2`, `redis`)
+    - PostgreSQL 数据库初始化(迁移脚本)
+    - Redis 缓存层
+    - Docker Compose 本地开发环境
+  - **账号注册**(G-8 加密):
+    - 邮箱必填 + 学科 + 学校
+    - AES-256-GCM 加密邮箱(本地 KeyStore,开发期)
+    - HMAC-SHA256 单向哈希(用于查询)
+    - Argon2id 密码哈希
+  - **导师创建请求**:
+    - 任意名 + 学科 + 学院
+    - HMAC-SHA256 hash 去重
+    - 进入 `pending_review`
+  - **化名生成器 v0.8**:
+    - 词库(古风/自然/几何/学科融合)
+    - 多字符集(拉丁 + 希腊 + 数字 + 数学符号)
+    - 人名白名单 10000+ 词
+    - 严格 1-to-1 唯一
+  - **评分 CRUD**:
+    - 滑块 0-100 + 附加信息(可选)
+    - 走 `pending_review` 流程
+  - **聚合 API**:综合分 + 雷达图(基础账号可见)
+  - **登录墙 + 会员墙**:JWT(15 分钟) + Refresh Token(7 天)
 - **M2 — 学科自适应权重**
   - 投票机制
   - 权重动态计算
@@ -936,8 +979,22 @@ EncryptionAuditLog
 - G-26 ☑ 评分公式可后续修改
 - G-27 ☒ 不做侵权投诉
 - G-28 ☒ 不做导师自证
-- H-1–H-9 ❓ 技术选型
-- I-1–I-6 ❓ 运营
+- H-1 ☑ 后端 = Rust
+- H-2 ☑ 数据库 = PostgreSQL
+- H-3 ❓ 存储(证据附件)
+- H-4 ☑ 搜索引擎 = Postgres FTS
+- H-5 ☑ 前端 = React
+- H-6 ❓ 部署
+- H-7 ❓ 监控
+- H-8 ❓ 邮件服务
+- H-9 ☑ CI/CD = GitHub Actions
+- H-10 ❓ 支付渠道
+- I-1 ❓ 冷启动
+- I-2 ❓ 推广
+- I-3 ☑ 不做"机构"层
+- I-4 ☒ 不做学术合作
+- I-5 ☑ 国际化 = 中英双语
+- I-6 ❓ 公开 API
 - J-1 ☑ 永久
 - J-2 ☑ 可修改
 - J-3 ❓ 修正规则可调整
@@ -969,10 +1026,11 @@ EncryptionAuditLog
 | **v0.6** | 极简公开 + k-匿名 + 后台真名映射 | **已废** |
 | **v0.7** | 推翻"后台存真名"假设 → 无关化名 + 用户自由命名 + 审核员无查询权 | 当前 |
 | **v0.8** | 化名生成器升级(多风格+学科融合+多字符集) + 重复评价提示 + 严格 1-to-1 | 当前 |
-| **v0.9** | 评分表单重构(滑块+附加信息) + 均值变动曲线(替代修改历史) + 简化(去侵权/自证/导出) | **当前** |
+| **v0.9** | 评分表单重构(滑块+附加信息) + 均值变动曲线(替代修改历史) + 简化(去侵权/自证/导出) | 历史 |
+| **v1.0** | 清理废设计残留 + 锁定技术栈(Rust + PostgreSQL + Postgres FTS + React) + 不做学术合作 | **当前** |
 
 **关键设计决策**:
 - v0.5 → v0.6 转变:从"零映射" → "真名映射"是设计反复(用户最初想完全不存真名,后改主意)
 - v0.6 → v0.7 转变:再次推翻"真名映射" → 改为"无关化名"(用户明确化名必须与真名无关)
 - v0.8 → v0.9 转变:删除"修改时间线"展示,改为"均值变动曲线"(更彻底的隐私)
-- v0.9 最终:法律风险 🟢 极低 + 隐私制度齐备 + 主动声明 + 举报流程
+- v1.0 锁栈:后端 Rust(类型安全 + 高性能,适合隐私敏感系统)+ PostgreSQL(关系型 + JSONB + FTS 一体化)
