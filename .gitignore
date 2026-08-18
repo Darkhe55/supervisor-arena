@@ -1,0 +1,95 @@
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ---- Editor / IDE ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.tmp
+
+# ---- Secrets (never commit) ----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+secrets/
+
+# ---- Logs / runtime ----
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# ---- Node / TypeScript ----
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Go ----
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# ---- Rust ----
+target/
+Cargo.lock
+
+# ---- C / C++ build ----
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.exe
+build/
+cmake-build-*/
+.vs/
+.vscode/c_cpp_properties.json
+compile_commands.json
+
+# ---- Database / data ----
+*.db
+*.sqlite
+*.sqlite3
+data/
+fixtures/
+
+# ---- Local-only docs / drafts ----
+drafts/
+notes-private/
+todo-personal.md
+
+# ---- Misc ----
+.cache/
+.parcel-cache/
+.eslintcache
