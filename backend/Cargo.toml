@@ -1,0 +1,102 @@
+[package]
+name = "supervisor-arena"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Crowd-sourced supervisor rating system with anonymous alias protection"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Darkhe55/supervisor-arena"
+readme = "README.md"
+
+[lib]
+name = "supervisor_arena"
+path = "src/lib.rs"
+
+[[bin]]
+name = "supervisor-arena"
+path = "src/main.rs"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "request-id", "limit"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+sqlx = { version = "0.8", features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "uuid",
+    "chrono",
+    "json",
+    "macros",
+    "migrate",
+] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Time + ID
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Encryption / hashing (G-8)
+aes-gcm = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+argon2 = "0.5"
+rand = "0.8"
+hex = "0.4"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+# Auth
+jsonwebtoken = "9"
+
+# Config
+dotenvy = "0.15"
+config = { version = "0.14", default-features = false, features = ["toml"] }
+
+# Misc
+regex = "1"
+once_cell = "1"
+async-trait = "0.1"
+validator = { version = "0.18", features = ["derive"] }
+
+[dev-dependencies]
+pretty_assertions = "1"
+proptest = "1"
+mockall = "0.13"
+testcontainers = "0.20"
+testcontainers-modules = { version = "0.11", features = ["postgres", "redis"] }
+serial_test = "3"
+
+[profile.dev]
+opt-level = 0
+debug = 1
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# Reduce binary size + faster compile
+[profile.dev.package."*"]
+opt-level = 0
+
+# Compile-time SQL check requires DATABASE_URL at build time
+# Set this when running `sqlx migrate` or first build:
+#   export DATABASE_URL=postgres://user:pass@localhost/supervisor_arena
+# To skip compile-time checks during early dev, use cargo sqlx prepare
