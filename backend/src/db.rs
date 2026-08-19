@@ -15,12 +15,16 @@ use crate::config::DatabaseConfig;
 
 /// Build a Postgres connection pool from configuration
 pub async fn build_pool(config: &DatabaseConfig) -> Result<PgPool> {
-    let mut connect_options = PgConnectOptions::from_str(&config.url)
+    let connect_options = PgConnectOptions::from_str(&config.url)
         .context("invalid DATABASE_URL")?
-        .application_name("supervisor-arena");
-
-    // Silence SQLx INFO logs (too noisy for every query)
-    connect_options = connect_options.log_statements(LevelFilter::Debug);
+        .application_name("supervisor-arena")
+        // Force C locale on the connection (fixes Alpine musl PG + sqlx 0.8
+        // 'non-UTF-8 string' error). These are sent as `options` to the
+        // server on connection, no URL encoding needed.
+        .options("lc_messages=C")
+        .options("client_encoding=UTF8")
+        // Silence SQLx INFO logs (too noisy for every query)
+        .log_statements(LevelFilter::Debug);
 
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
