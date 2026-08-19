@@ -12,6 +12,11 @@ services:
       POSTGRES_USER: supervisor
       POSTGRES_PASSWORD: supervisor_dev_pwd
       POSTGRES_DB: supervisor_arena
+      # Force UTF-8 locale to fix sqlx 0.8 compatibility with Alpine musl PG
+      # Alpine's en_US.utf8 is not binary-compatible with what sqlx expects
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C.UTF-8 --lc-ctype=C.UTF-8"
     ports:
       - "5432:5432"
     volumes:
