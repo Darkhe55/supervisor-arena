@@ -49,15 +49,20 @@ pub async fn build_pool(config: &DatabaseConfig) -> Result<PgPool> {
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     info!("Running migrations...");
 
-    let migrator = sqlx::migrate!("./migrations")
+    // sqlx 0.8: Migrator::run returns () on success
+    sqlx::migrate!("./migrations")
         .run(pool)
         .await
         .context("failed to run migrations")?;
 
-    info!(
-        applied = migrator.applied_migrations().len(),
-        "Migrations applied successfully"
-    );
+    // Count applied migrations from the tracking table
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(pool)
+            .await
+            .context("failed to count applied migrations")?;
+
+    info!(applied = count, "Migrations applied successfully");
 
     Ok(())
 }
