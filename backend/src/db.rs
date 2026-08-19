@@ -1,6 +1,8 @@
 //! Database connection pool + migrations
 //!
 //! Phase 2: 提供 sqlx Postgres 连接池 + 自动 migration runner
+//!
+//! Note: 使用 sqlx 0.7(0.8 在 Windows + Alpine musl PG 下有 non-UTF-8 错误)
 
 use anyhow::{Context, Result};
 use sqlx::{
@@ -17,12 +19,10 @@ use crate::config::DatabaseConfig;
 pub async fn build_pool(config: &DatabaseConfig) -> Result<PgPool> {
     let connect_options = PgConnectOptions::from_str(&config.url)
         .context("invalid DATABASE_URL")?
-        .application_name("supervisor-arena")
-        // Force C locale on the connection (fixes Alpine musl PG + sqlx 0.8
-        // 'non-UTF-8 string' error). options() takes key-value pairs.
-        .options([("lc_messages", "C"), ("client_encoding", "UTF8")])
-        // Silence SQLx INFO logs (too noisy for every query)
-        .log_statements(LevelFilter::Debug);
+        .application_name("supervisor-arena");
+
+    // Silence SQLx INFO logs (too noisy for every query)
+    let connect_options = connect_options.log_statements(LevelFilter::Debug);
 
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
@@ -51,7 +51,7 @@ pub async fn build_pool(config: &DatabaseConfig) -> Result<PgPool> {
 pub async fn run_migrations(pool: &PgPool) -> Result<()> {
     info!("Running migrations...");
 
-    // sqlx 0.8: Migrator::run returns () on success
+    // sqlx 0.7: takes &pool
     sqlx::migrate!("./migrations")
         .run(pool)
         .await
@@ -73,18 +73,6 @@ pub async fn run_migrations(pool: &PgPool) -> Result<()> {
 pub async fn close_pool(pool: PgPool) {
     pool.close().await;
     info!("PostgreSQL pool closed");
-}
-
-/// Acquire a single connection (for transactional operations)
-///
-/// Helper: many migrations need explicit transactions to be atomic.
-pub async fn acquire(pool: &PgPool) -> Result<sqlx::PgConnection> {
-    let conn = pool
-        .acquire()
-        .await
-        .context("failed to acquire connection")?
-        .detach();
-    Ok(conn)
 }
 
 /// Database health check (for /health endpoint in future)

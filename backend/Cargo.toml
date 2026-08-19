@@ -26,7 +26,9 @@ tower-http = { version = "0.6", features = ["trace", "cors", "request-id", "limi
 tokio = { version = "1", features = ["full"] }
 
 # Database
-sqlx = { version = "0.8", features = [
+# Downgraded 0.8 -> 0.7 due to sqlx 0.8 + Alpine musl PG non-UTF-8 error
+# 0.7 doesn't have this compatibility issue
+sqlx = { version = "0.7", features = [
     "runtime-tokio-rustls",
     "postgres",
     "uuid",
