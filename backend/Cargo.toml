@@ -78,7 +78,7 @@ validator = { version = "0.18", features = ["derive"] }
 pretty_assertions = "1"
 proptest = "1"
 mockall = "0.13"
-testcontainers = "0.20"
+testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres", "redis"] }
 serial_test = "3"
 
