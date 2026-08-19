@@ -2,7 +2,10 @@
 
 ## Status
 
-**Phase 1: Project Scaffold** ✅
+**Phase 2: Database Migrations** ✅
+
+- Phase 1 (project scaffold) ✅
+- **Phase 2 (11 tables + seed) ✅** ← current
 
 This is the Rust backend for the supervisor-arena project — a crowd-sourced
 supervisor rating system with anonymous alias protection (see
@@ -96,7 +99,7 @@ backend/
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Project scaffold | ✅ |
-| 2 | Database migrations (sqlx) + connection pool | ⏳ |
+| 2 | Database migrations (sqlx) + connection pool | ✅ |
 | 3 | Crypto module (AES-256-GCM + HMAC + Argon2id) | ⏳ |
 | 4 | Account module (register/login/JWT) | ⏳ |
 | 5 | Supervisor + AliasGenerator (核心) | ⏳ |
