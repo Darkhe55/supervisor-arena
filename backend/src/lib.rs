@@ -14,6 +14,7 @@ pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod observability;
+pub mod supervisor;
 
 use anyhow::Result;
 use axum::{extract::State, routing::get, Json, Router};

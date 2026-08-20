@@ -558,6 +558,63 @@
 - **未来**:加 `GET /auth/me/settings` 单独 endpoint 返回 P0 解密字段(也是用户主动请求)
 - **关联**:H-18、F-3
 
+### H-23 ☑ M5 alias generator 算法
+- **核心**:deterministic by seed — 同 `(submitted_name, discipline, college)` 三元组必产同一化名
+- **算法**:
+  ```
+  seed = HMAC-SHA256(hmac_key, "alias:" + name + "|" + disc + "|" + coll + "|salt:N")
+  rng  = SplitMix32(seed[0..4])
+  style   = pick_style(rng.next())  // 50% 学科融合 / 20% 自然 / 15% 文学 / 15% 几何
+  words   = pick_words(style, rng)
+  suffix  = 3-char [0-9a-z] (DisciplineFused) 或 6-char hex (Geometric)
+  alias   = combine(style, words, suffix)
+  ```
+- **白名单检查**:生成后查人名表(starter 4172 条,目标 10000+),命中则 `salt += 1` 重试,最多 32 次
+- **不可逆**:HMAC key 在服务端,旁观者无法从化名反推输入;攻击者拿一个 alias 不能 derive 其他 (name, disc, coll) 组合
+- **1-to-1 强制**:
+  - 同一 (name, disc, coll) 必同 alias(算法决定性)
+  - 不同 (disc, coll) 必不同 alias(算法 + DB UNIQUE 双重保险)
+- **风格分布**:50% 学科融合(满足 OUTLINE §7.10.3 rule 2 强调的"必须多风格 + 学科融合"),剩余三档均分
+- **判据**:
+  - 测试 `deterministic_for_same_input` 锁死决定性
+  - 测试 `never_collides_with_whitelist_in_1000_attempts` 锁死白名单不命中
+  - 测试 `all_styles_appear_in_a_large_sample` 锁死 4 风格多样性
+- **关联**:G-13、OUTLINE §7.10.3、§7.10.4
+
+### H-24 ☑ M5 alias 词库 = 嵌入常量 (编译时 include)
+- **形式**:`const LITERARY_WORDS: &[&str] = &[ ... ];` — 全部 hardcode 在 `words.rs`
+- **理由**:
+  - 二进制自包含,无部署期 asset 装配
+  - 词库随 code 版本化,任何修改都是 code change
+  - 单元测试能 pin 词库大小(添加新词会失败,提示扩词库的同步动作)
+- **当前规模**:
+  - 文学 27 + 文学 title 8 = 35
+  - 自然 25
+  - 几何 prefix 12
+  - 希腊字母 26
+  - 数学符号 11
+  - 6 学科门类 × ~8 template = ~48 discipline-fused
+  - **可寻址化名空间 ~ 1.35 × 10^5 base components × 4 风格 × 36^3 suffix ≈ 10^9**
+- **增长**:
+  - M5b:补全 6 学科门类到 ~20 template each(总数 ~120)
+  - M6:加入 modern / sci-fi 风格(更分散)
+  - M7 上线前:验证跨学科覆盖齐全
+- **关联**:H-23、words.rs
+
+### H-25 ☑ M5 人名白名单 = starter set 4172 条 + 增长路线图
+- **当前规模**:
+  - 100 个常见中文姓氏 × 40 个常见单字 + 双字名 → ~4 200 条 "姓+名" 组合
+  - 40 个独立单字名("伟" / "芳" / "娜" 等)
+  - 128 个英文 given name + surname
+  - **合计 4 172 条**
+- **starter 阶段可接受**:测试 `never_collides_with_whitelist_in_1000_attempts` 验证 1000 个 (name, disc, coll) 组合零命中;32 次 retry 上限给出 < 10^-39 残留碰撞率
+- **增长路线**:
+  - M5b:扩到 ~10 000 条(全 百家姓 + 公安部姓氏普查 + 常见 1000 双字名)
+  - M6:接公开数据集(US Census surname data, China 2019 census)
+  - M7 (法律门):律师评估白名单覆盖度,不达标不发公测
+- **判据**:`whitelist_size_is_documented` 测试 + `whitelist_is_lowercased` 测试
+- **关联**:H-23、OUTLINE §7.10.3 rule 1、§7.10.7
+
 ---
 
 ## I. 运营
