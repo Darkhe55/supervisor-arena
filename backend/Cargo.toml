@@ -52,11 +52,18 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Encryption / hashing (G-8)
+# `aead` is the high-level AEAD trait surface (re-exported by aes-gcm but used
+# directly in crypto::aes). `rand_core` 0.6 (NOT 0.9) is required by aes-gcm
+# 0.10 / aead 0.5's `OsRng`. `getrandom` is used in crypto::error for the
+# `From<getrandom::Error>` conversion.
 aes-gcm = "0.10"
+aead = "0.5"
 hmac = "0.12"
 sha2 = "0.10"
 argon2 = "0.5"
 rand = "0.8"
+rand_core = "0.6"
+getrandom = "0.2"
 hex = "0.4"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 

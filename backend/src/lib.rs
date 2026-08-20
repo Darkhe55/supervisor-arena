@@ -2,7 +2,7 @@
 //!
 //! Phase 1 scaffold — modules will be added incrementally:
 //!   Phase 2: db (migrations + connection pool) ✅ Plan B (deadpool-postgres + tokio-postgres)
-//!   Phase 3: crypto (AES-256-GCM + HMAC-SHA256 + Argon2id)
+//!   Phase 3: crypto (AES-256-GCM + HMAC-SHA256 + Argon2id) ✅ LocalKeyStore
 //!   Phase 4: account (registration, login, JWT)
 //!   Phase 5: supervisor + alias_generator
 //!   Phase 6: rating
@@ -10,6 +10,7 @@
 //!   Phase 8: tests
 
 pub mod config;
+pub mod crypto;
 pub mod db;
 pub mod observability;
 
@@ -21,15 +22,22 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::config::AppConfig;
+use crate::crypto::LocalKeyStore;
 
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub db: Pool,
+    pub keys: Arc<LocalKeyStore>,
 }
 
 pub async fn run(config: AppConfig) -> Result<()> {
+    // Initialize key store (parses hex keys, fails fast on bad config)
+    let keys = LocalKeyStore::from_config(&config.encryption)
+        .map_err(|e| anyhow::anyhow!("invalid encryption config: {e}"))?;
+    info!(key_id = %keys.key_id(), "LocalKeyStore initialized");
+
     // Initialize database pool
     let db = db::build_pool(&config.database).await?;
     db::run_migrations(&db).await?;
@@ -38,6 +46,7 @@ pub async fn run(config: AppConfig) -> Result<()> {
     let state = AppState {
         config: Arc::new(config.clone()),
         db,
+        keys: Arc::new(keys),
     };
 
     let app = build_router(state);
@@ -60,6 +69,7 @@ fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/health/db", get(health_db))
+        .route("/health/crypto", get(health_crypto))
         .route("/version", get(version))
         .with_state(state)
 }
@@ -81,6 +91,24 @@ async fn health_db(State(state): State<AppState>) -> Json<HealthResponse> {
     let db_ok = db::health_check(&state.db).await.is_ok();
     Json(HealthResponse {
         status: if db_ok { "ok" } else { "degraded" },
+        version: env!("CARGO_PKG_VERSION"),
+    })
+}
+
+/// Smoke-test the key store: encrypt then decrypt a sentinel string.
+/// Returns "ok" if round-trip succeeds, "degraded" otherwise.
+async fn health_crypto(State(state): State<AppState>) -> Json<HealthResponse> {
+    use crate::crypto::aes;
+    let key = state.keys.field_key();
+    let sentinel = "supervisor-arena/health";
+    let ok = match aes::encrypt(key, sentinel.as_bytes(), Some(b"health-check")) {
+        Ok(blob) => aes::decrypt(key, &blob, Some(b"health-check"))
+            .map(|pt| pt.as_slice() == sentinel.as_bytes())
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    Json(HealthResponse {
+        status: if ok { "ok" } else { "degraded" },
         version: env!("CARGO_PKG_VERSION"),
     })
 }

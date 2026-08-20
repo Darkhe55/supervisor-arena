@@ -2492,6 +2492,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "supervisor-arena"
 version = "0.1.0"
 dependencies = [
+ "aead",
  "aes-gcm",
  "anyhow",
  "argon2",
@@ -2502,6 +2503,7 @@ dependencies = [
  "deadpool",
  "deadpool-postgres",
  "dotenvy",
+ "getrandom 0.2.17",
  "hex",
  "hmac 0.12.1",
  "jsonwebtoken",
@@ -2510,6 +2512,7 @@ dependencies = [
  "pretty_assertions",
  "proptest",
  "rand 0.8.7",
+ "rand_core 0.6.4",
  "regex",
  "serde",
  "serde_json",

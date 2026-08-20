@@ -470,6 +470,50 @@
 - **判据**:改 .env 后 cargo run 输出 URL 没变,基本就是这个 bug
 - **关联**:H-11、config.rs
 
+### H-14 ☑ M3 crypto 模块 = AES-256-GCM + HMAC-SHA256 + Argon2id + LocalKeyStore
+- **范围**(对齐 G-8 / OUTLINE §7.9):
+  - `crypto::aes` — AES-256-GCM(认证加密,可还原),P0/P2 字段
+  - `crypto::hmac` — HMAC-SHA256(单向),P1 字段
+  - `crypto::argon2` — Argon2id(密码专用)
+  - `crypto::keystore::LocalKeyStore` — 启动期从 env 加载 2 个 32-byte key,AES 用 + HMAC 用
+- **输出格式**:
+  - AES blob:`nonce(12) || ciphertext || tag(16)`(直接存 BYTEA)
+  - HMAC:小写 hex 字符串(64 chars,存 VARCHAR(64) 或 BYTEA 都行)
+  - Argon2:PHC 字符串(`$argon2id$v=19$m=...$t=...$p=...$salt$hash`)
+- **依赖**:`aes-gcm = "0.10"` + `aead = "0.5"` + `hmac = "0.12"` + `sha2 = "0.10"` + `argon2 = "0.5"` + `rand_core = "0.6"` + `getrandom = "0.2"` + `hex = "0.4"` + `zeroize = "1"`(已选 0.10/0.5/0.6/0.2 是因为 aes-gcm 0.10 / aead 0.5 锁定这套;`rand 0.8` 也直接依赖但跟 aead 0.5 走 rand_core 0.6 路径)
+- **API**:
+  - `aes::encrypt/decrypt(&[u8;32], &[u8], Option<&[u8]>)` — AAD 可选
+  - `aes::encrypt_str/decrypt_str` — 字符串便捷包装
+  - `hmac::hash_str/hash_str_with_salt` — hex 字符串输出
+  - `argon2::hash_password/verify_password` — PHC 格式
+  - `LocalKeyStore::from_config(&EncryptionConfig)` / `from_raw` / `field_key()` / `hmac_key()` / `key_id()`
+- **测试**:28 unit tests 全过(round-trip / AAD mismatch / 篡改检测 / nonce 唯一性 / 错误密钥 / PHC verify / 错误密码 / 错 hex / 错长度 / Debug 不泄露密钥)
+- **判据**:任何"敏感字段怎么存"的问题,直接看 G-8 表 + 本模块 API;调用方不应重新发明加密逻辑
+- **关联**:G-8、H-1、OUTLINE §7.9
+
+### H-15 ☑ AAD = 字段名绑定(防止 cross-column replay)
+- **策略**:AES 加密时,推荐传 `Some(b"column_name")` 当 AAD;解密时**必须传相同 AAD** 才通过
+- **效果**:`accounts.email_enc` 列里偷出的密文,无法被塞进 `accounts.phone_enc` 列(因为 AAD 不同,GCM 认证失败)
+- **默认**:helper 接受 `Option<&[u8]>`,业务层在 encrypt/decrypt 时显式指定列名
+- **判据**:任何 P0/P2 字段的 encrypt 调用,都加 `Some(b"accounts.email".as_bytes())` 形式
+- **关联**:H-14、OUTLINE §7.9.1
+
+### H-16 ☑ 密钥轮换策略 = 单 key 版本,M6 接 KMS
+- **当前(M3)**:1 个 field key + 1 个 hmac key 加载到 `LocalKeyStore`,无版本号
+- **轮换**:靠 `ENCRYPTION__KEY_ROTATION_DAYS=90` 提醒(operator 流程);不强制
+- **限制**:轮换时**必须重加密全部密文**(因为没有 key id 跟 ciphertext 一起存);这就是为什么 M3 不强制轮换
+- **M6 计划**:`KmsKeyStore` 接 AWS KMS / 阿里云 KMS;密文格式变成 `version(1) || nonce(12) || ciphertext || tag(16)`,version 选 key;老 key 不删除,允许 decrypt 旧数据
+- **判据**:M3 阶段不要实现"key id 嵌入密文"格式,等 M6 一次性上
+- **关联**:H-14、M6(安全加固里程碑)
+
+### H-17 ☑ Dev placeholder = `deadbeef*` 前缀检测
+- **约定**:开发期 `.env` 里的 `ENCRYPTION__FIELD_KEY` 和 `ENCRYPTION__HMAC_SALT_KEY` 以 `deadbeef` 开头(经典 hex 占位符模式,有效 hex 字符)
+- **检测**:`LocalKeyStore::from_config` 检查任一 key 是否以 `deadbeef` 开头,触发 startup warning + `key_id = "dev-placeholder"`
+- **生产检测**:`key_id = "local:<4-byte-fingerprint>"`,日志可关联"哪个 key 版本加密的"而不泄露 key
+- **未来 KMS**:`KmsKeyStore` 直接拿 KMS 提供的 key ARN / alias 当 key_id
+- **修法**:生产前 `openssl rand -hex 32` 生成,基本不可能以 `deadbeef` 开头(8 个特定 hex 字符概率 = 1/2^32)
+- **关联**:H-14、env.example
+
 ---
 
 ## I. 运营
