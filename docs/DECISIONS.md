@@ -615,6 +615,54 @@
 - **判据**:`whitelist_size_is_documented` 测试 + `whitelist_is_lowercased` 测试
 - **关联**:H-23、OUTLINE §7.10.3 rule 1、§7.10.7
 
+### H-26 ☑ M5b supervisor service/repo/handler 范围
+- **路由**:
+  - `POST /supervisors/request` — authed user 提交 (submitted_name, discipline, college)
+  - `GET  /supervisors/by-alias/{alias}` — 公开视图,带 k-anon gating
+  - `GET  /supervisors/review/queue` — reviewer 看 pending 列表
+  - `POST /supervisors/review/{id}` — reviewer approve | reject
+- **流程**:
+  1. 验证:non-empty + length caps + discipline/college 在 lookup 表
+  2. Dedup-by-hash 三元组 (name_hash, disc_hash, coll_hash) 查 supervisor_name_mappings
+  3. 已存在 → 返回已有 alias (status: deduplicated, request_id: 0000...)
+  4. 不存在 → AES 加密 + 生成 alias (deterministic) + 入 pending_review 队列
+  5. Reviewer approve → 单事务:INSERT supervisor (status='approved') + INSERT mapping + UPDATE request (approved, resolved_supervisor_id) + 重算 k_count
+  6. Reviewer reject → UPDATE request (rejected, notes)
+- **k-anonymity 阈值 = 10** (写死;生产可改 env)
+  - approved + k_count >= 10 → visible: true (公开)
+  - approved + k_count < 10  → visible: false (row 存在但隐藏)
+  - 不是 approved                → visible: false
+- **关联**:G-14、H-23、OUTLINE §7.10.4
+
+### H-27 ☑ Dedup 时刻 = approve 之后(不是 submit 时)
+- **当前**:`find_mapping_by_dedup` 只查 `supervisor_name_mappings`,该表在 approve 后才有行
+- **行为**:同一 (name, disc, coll) 重复 submit:
+  - 在 approve 之前:创建 N 条 pending_review 记录(每条都是同样的 alias 因为 deterministic)
+  - 在 approve 之后:第 1 次查到 mapping,后续全部 dedup 返回相同 alias
+- **Trade-off**:符合 OUTLINE §7.10.4 step 2(查映射表),schema 简洁
+- **M5c 改进**:加 `pending_request_dedup` 检查(create_request 前先查 supervisor_creation_requests 的 (name_hash, disc_hash, coll_hash)),避免 reviewer 看到 50 条 pending 张伟
+- **关联**:H-26
+
+### H-28 ☑ PG 参数显式 cast (`::text` / `::uuid` / `::bytea`)
+- **问题**:tokio-postgres 传 `&[&str]` / `&[&Uuid]` / `&[&[u8]]` 时,PG 经常报 `42P18 could not determine data type of parameter $1`,因为 wire-protocol 层无法 infer param 类型
+- **修法**:所有 SQL placeholders 加显式 cast
+  - `WHERE code = $1::text` (text 字段)
+  - `WHERE id = $1::uuid` (uuid 字段)
+  - `WHERE submitted_name_hash = $1::bytea` (bytea 字段)
+  - `INSERT ... VALUES ($1::text, $2::text, $3::text)` 等等
+- **额外坑**:
+  - `i64` 不会自动 narrow 到 `INTEGER` (i32) — 必须显式 `::int` 或改类型
+  - placeholder 比 params 多 → PG 报 $N 缺失;比 params 少 → 报 $N 不可 infer
+  - 错误 "error serializing parameter 0" 通常是 type 错配(不是 placeholder 缺失)
+- **判据**:`logs/log_min_duration_statement=200ms` + docker `log_statement=all` 看到真实 SQL + params
+- **关联**:H-26、§7.10.1 物理隔离
+
+### H-29 ☑ M5b created_by = submitter_id(不是 reviewer_id)
+- **问题**:首次实现把 `reviewer_id` 写进 supervisor_name_mappings.created_by(语义错 — created_by 是"创建者",应该是 submitter)
+- **修法**:approve_request 多传一个 `submitter_id` 参数,INSERT mapping 时用它
+- **reviewer_id** 仍记在 supervisor_creation_requests.reviewer_id(独立审计字段)
+- **关联**:G-15(物理隔离审计)
+
 ---
 
 ## I. 运营

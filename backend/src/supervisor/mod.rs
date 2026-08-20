@@ -1,24 +1,36 @@
 //! Supervisor module — Phase 5 (M5) of the project plan
 //!
-//! Implements the public-side of OUTLINE §7.10 (导师匿名系统 — 无关化名 + k-匿名).
+//! Implements the full OUTLINE §7.10 flow:
 //!
-//! **This commit covers the deterministic alias generator core**:
-//! - Word lists (literary / nature / geometric / 6 学科门类)
-//! - Person-name whitelist (starter set, growth plan documented)
-//! - `AliasGenerator` — HMAC-seeded deterministic algorithm
-//! - Style + discipline-fused templates
-//! - Whitelist collision detection + retry
-//! - 1-to-1 enforcement (delegated to DB UNIQUE constraint)
+//! **Phase 5b (this commit)** — service / repo / handler / k-anonymity:
+//! - `alias`     — deterministic alias generator (HMAC seed + SplitMix32)
+//! - `words`     — word lists + discipline category mapping
+//! - `whitelist` — person-name collision check
+//! - `dto`       — HTTP DTOs
+//! - `error`     — `SupervisorError` mapping
+//! - `repo`      — DB access (4 tables + lookup tables)
+//! - `service`   — create_request flow (dedup → encrypt → generate alias →
+//!                 review queue) + approve/reject + k-anonymous public view
+//! - `handler`   — axum routes (`/supervisors/*`)
 //!
-//! **Deferred to M5b**: the supervisor creation flow itself
-//! (POST /supervisors/request, dedup-via-hash, mapping table write,
-//! review queue). That's the orchestration + DB write layer on top
-//! of this core.
+//! **Deferred to M5c** (still in Phase 5): review SLA scheduler (cron),
+//! reject-reason capture in audit log, name-mismatch probe
+//! (does a new entry's submitted_name look like a real person?).
 
 pub mod alias;
+pub mod dto;
 pub mod error;
+pub mod handler;
+pub mod repo;
+pub mod service;
 pub mod whitelist;
 pub mod words;
 
 pub use alias::{AliasGenerator, AliasInput, AliasStyle};
-pub use error::AliasError;
+pub use dto::{
+    CreateSupervisorRequest, CreateSupervisorResponse, PendingReviewEntry, ReviewAction,
+    ReviewActionKind, SupervisorPublicView, SupervisorRequestStatus,
+};
+pub use error::SupervisorError;
+pub use handler::supervisor_router;
+pub use service::SupervisorService;

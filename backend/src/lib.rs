@@ -74,6 +74,7 @@ fn build_router(state: AppState) -> Router {
         .route("/health/crypto", get(health_crypto))
         .route("/version", get(version))
         .nest("/auth", account::handler::auth_router())
+        .nest("/supervisors", supervisor::handler::supervisor_router())
         .with_state(state)
 }
 
