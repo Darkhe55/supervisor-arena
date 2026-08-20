@@ -3,12 +3,13 @@
 //! Phase 1 scaffold — modules will be added incrementally:
 //!   Phase 2: db (migrations + connection pool) ✅ Plan B (deadpool-postgres + tokio-postgres)
 //!   Phase 3: crypto (AES-256-GCM + HMAC-SHA256 + Argon2id) ✅ LocalKeyStore
-//!   Phase 4: account (registration, login, JWT)
+//!   Phase 4: account (registration, login, JWT, /auth/me) ✅
 //!   Phase 5: supervisor + alias_generator
 //!   Phase 6: rating
 //!   Phase 7: aggregation + public_api
 //!   Phase 8: tests
 
+pub mod account;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -71,6 +72,7 @@ fn build_router(state: AppState) -> Router {
         .route("/health/db", get(health_db))
         .route("/health/crypto", get(health_crypto))
         .route("/version", get(version))
+        .nest("/auth", account::handler::auth_router())
         .with_state(state)
 }
 

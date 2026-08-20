@@ -514,6 +514,50 @@
 - **修法**:生产前 `openssl rand -hex 32` 生成,基本不可能以 `deadbeef` 开头(8 个特定 hex 字符概率 = 1/2^32)
 - **关联**:H-14、env.example
 
+### H-18 ☑ M4 account module scope
+- **路由**:
+  - `POST /auth/register` — 创建账号(邮箱 + 密码 + 学科 + 学校 + 可选 grade)
+  - `POST /auth/login` — 邮箱 + 密码 → access token
+  - `GET  /auth/me` — Bearer token → 当前 account 公开信息
+- **加密**:
+  - `email_enc` AES-256-GCM(`Some(b"accounts.email_enc")` AAD)
+  - `email_hash` / `discipline_hash` / `institution_hash` HMAC-SHA256(32 bytes → BYTEA)
+  - `grade_enc` AES-256-GCM (P2,可选)
+  - `password_hash` Argon2id PHC 字符串 (TEXT)
+- **JWT**:HS256,15 min access TTL,**无 refresh** (M5 再加)
+- **关联**:G-8、OUTLINE §7.1/§7.10
+
+### H-19 ☑ Password policy (NIST SP 800-63B §5.1.1.2 风格)
+- **要求**:
+  - 长度 ≥ 12 字符(ASCII 字节)
+  - 必须含至少 1 字母 + 1 数字
+  - 不强制大写/符号(避免 `Password1!` 这种可预测模式)
+- **不在 M4 实现**:zxcvbn 强度检测、breached password list(Have I Been Pwned API)、密码过期(都列 M5+ 改进)
+- **M1-3 已经过 Argon2id 加密**(m=19456 KiB, t=2, p=1,OWASP 默认),hash 时间 ~50ms 即可顶住批量破解
+- **关联**:H-18
+
+### H-20 ☑ Email validation = 轻量格式检查(M4) + 真实验证(M5+)
+- **当前 (M4)**:非空、≤254 字符、唯一 `@`、domain 至少 1 `.`、无 whitespace
+- **不验**:
+  - MX 记录(性能 + 隐私)
+  - 一次性邮箱(privacy.duckduckgo.com 等列表,放 M5 决策)
+  - 真实验证邮件(无 SMTP 服务,M4 不发)
+- **M5+**: 加 `email_verified bool` 列 + SMTP 集成 + 24h token 链接
+- **关联**:H-18
+
+### H-21 ☑ /auth/login = opaque error 防 enumeration
+- **"用户不存在" 和 "密码错" 返回相同的 `401 unauthorized` + 相同 body**(`{"error":"unauthorized","message":"invalid credentials"}`)
+- **缓解**:rate limit `RATE_LIMIT__LOGIN_PER_MIN=5` / IP(M5 用 Redis, M4 用 in-memory sliding window)
+- **不返回**:不返回"账号已 ban"细节(用 `403 AccountUnavailable` 但消息统一"unavailable")
+- **关联**:H-18、F-3
+
+### H-22 ☑ /auth/me 字段最小化 (F-3 数据双层墙)
+- **返回**:`account_id`, `tier`, `joined_at`
+- **不返回**:email / discipline / institution / grade(都是 P0/P1 敏感)
+- **理由**:out of scope for M4,业务上也没人需要 `/auth/me` 看自己邮箱(用户知道自己邮箱)
+- **未来**:加 `GET /auth/me/settings` 单独 endpoint 返回 P0 解密字段(也是用户主动请求)
+- **关联**:H-18、F-3
+
 ---
 
 ## I. 运营
