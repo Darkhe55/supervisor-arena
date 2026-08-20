@@ -26,15 +26,14 @@ tower-http = { version = "0.6", features = ["trace", "cors", "request-id", "limi
 tokio = { version = "1", features = ["full"] }
 
 # Database
-sqlx = { version = "0.8", features = [
-    "runtime-tokio-rustls",
-    "postgres",
-    "uuid",
-    "chrono",
-    "json",
-    "macros",
-    "migrate",
-] }
+# Using tokio-postgres + deadpool-postgres directly to avoid sqlx 0.8's
+# non-UTF-8 startup packet parsing bug with Alpine musl PostgreSQL.
+# tokio-postgres doesn't have this issue.
+# `deadpool` is required as a direct dep because db.rs references
+# `deadpool::managed::{PoolConfig, Timeouts, QueueMode}` for pool tuning.
+tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-chrono-0_4", "with-serde_json-1"] }
+deadpool-postgres = "0.14"
+deadpool = "0.12"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -96,7 +95,5 @@ strip = "symbols"
 [profile.dev.package."*"]
 opt-level = 0
 
-# Compile-time SQL check requires DATABASE_URL at build time
-# Set this when running `sqlx migrate` or first build:
-#   export DATABASE_URL=postgres://user:pass@localhost/supervisor_arena
-# To skip compile-time checks during early dev, use cargo sqlx prepare
+# Migrations are run at startup by `db::run_migrations` (hand-rolled).
+# No build-time DATABASE_URL is required.

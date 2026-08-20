@@ -437,6 +437,25 @@
 ### H-10 ❓ 支付渠道
 - 候选:Stripe / 支付宝 / 微信
 
+### H-11 ☑ DB driver = tokio-postgres + deadpool-postgres(Plan B)
+- **选项**:
+  - Plan A:降级到 `sqlx = "0.7"`(确认可工作,但版本老)
+  - Plan B:用 `tokio-postgres` + `deadpool-postgres` 直连(版本新,绕开 sqlx 0.8 bug)
+  - **确认**:Plan B
+- **理由**:
+  - sqlx 0.8 的 `ErrorResponse` parser 在 Alpine musl PostgreSQL 镜像下会因 `lc_messages` 编码问题拒绝非 UTF-8 字节(即使显式设 `lc_messages=C` 也无济于事)
+  - 调试耗时:4 次 commit 尝试绕过(0.8 → 0.7 → after_connect hook → 双重保险)全部失败
+  - 用户明确拒绝降级:希望保留 0.8 时代的依赖树
+- **实现**:
+  - `tokio-postgres = "0.7"`(原 PostgreSQL 协议库,无 SQL 解析层,所以没有这个 bug)
+  - `deadpool-postgres = "0.14"`(async pool,避免连接泄漏)
+  - `deadpool = "0.12"`(显式依赖,`db.rs` 直接用 `deadpool::managed::*` 配 PoolConfig)
+  - 手写 migration runner:读 `./migrations/*.sql`,按文件名排序,track `_migrations` 表
+- **损失**:
+  - 失去 `sqlx::query!` 的编译时 SQL 校验(但能接受 — migrations 是静态 SQL,后期用 `sqlx-cli prepare` 校验可选)
+  - 失去 `sqlx::FromRow` 派生(自己写 `From<&Row>` 或在 repo 层定义)
+- **关联**:H-1(后端 Rust)、H-2(数据库 PostgreSQL)
+
 ---
 
 ## I. 运营

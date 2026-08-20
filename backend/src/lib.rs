@@ -1,7 +1,7 @@
 //! supervisor-arena library crate
 //!
 //! Phase 1 scaffold — modules will be added incrementally:
-//!   Phase 2: db (migrations + connection pool) ✅
+//!   Phase 2: db (migrations + connection pool) ✅ Plan B (deadpool-postgres + tokio-postgres)
 //!   Phase 3: crypto (AES-256-GCM + HMAC-SHA256 + Argon2id)
 //!   Phase 4: account (registration, login, JWT)
 //!   Phase 5: supervisor + alias_generator
@@ -15,8 +15,8 @@ pub mod observability;
 
 use anyhow::Result;
 use axum::{extract::State, routing::get, Json, Router};
+use deadpool_postgres::Pool;
 use serde::Serialize;
-use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::info;
 
@@ -26,7 +26,7 @@ use crate::config::AppConfig;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<AppConfig>,
-    pub db: PgPool,
+    pub db: Pool,
 }
 
 pub async fn run(config: AppConfig) -> Result<()> {
