@@ -126,6 +126,34 @@ impl AccountRepo {
         Ok(row_opt.map(row_to_stored))
     }
 
+    /// Look up just the discipline_hash (P1) for an account. Used by the
+    /// rating module to snapshot the rater's discipline at submission time
+    /// (OUTLINE §5 dynamic relative correction needs the snapshot to stay
+    /// stable even if the user later changes their declared discipline).
+    ///
+    /// Returns `Ok(None)` if the account doesn't exist (e.g. account was
+    /// hard-deleted). Distinct from `Ok(Some(empty_vec))` which would
+    /// indicate a row with NULL discipline_hash (shouldn't happen — schema
+    /// marks the column NOT NULL).
+    pub async fn find_discipline_hash(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<Vec<u8>>, AccountError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("pool: {e}")))?;
+        let row_opt = client
+            .query_opt(
+                "SELECT discipline_hash FROM accounts WHERE id = $1::uuid LIMIT 1",
+                &[&id],
+            )
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("query: {e}")))?;
+        Ok(row_opt.map(|r| r.get(0)))
+    }
+
     /// Update `last_active_at` to now. Best-effort — log but don't error.
     pub async fn touch_active(&self, id: Uuid) -> Result<(), AccountError> {
         let client = self

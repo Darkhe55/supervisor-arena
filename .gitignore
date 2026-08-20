@@ -71,6 +71,7 @@ sqlx-data.json
 # ---- Backend local-only ----
 backend/.env
 backend/.env.local
+backend/.alice_token       # ephemeral JWT from curl E2E tests
 backend/coverage/
 backend/tarpaulin-report.html
 

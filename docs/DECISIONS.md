@@ -663,6 +663,49 @@
 - **reviewer_id** 仍记在 supervisor_creation_requests.reviewer_id(独立审计字段)
 - **关联**:G-15(物理隔离审计)
 
+### H-30 ☑ M6 rating module 范围
+- **路由**:
+  - `POST /supervisors/{alias}/ratings` — submit 一条评分(1 个 dim)
+  - `GET  /supervisors/{alias}/ratings/me` — 当前账号对 supervisor 的全部历史(含 superseded)
+- **流程**:
+  1. Validate (dim ∈ 6, value ∈ -100..100, additional_level ∈ L1..L4, evidence URL 格式)
+  2. Resolve supervisor by alias → 必须 `review_status='approved'`
+  3. Snapshot rater's discipline_hash(为 §5 学科相关性加权)
+  4. AES-256-GCM 加密 optional P2 字段 (dim_additional, overall_additional)
+  5. 事务里 3 步 B-9 supersede (见 H-31)
+  6. 返回 outcome: created (201) / updated (200)
+- **6 dims**(OUTLINE §3): research / resource / fit / currency / ethic / tool
+- **值范围**: -100..=100(CHECK 约束;M6 不强制 C-6 解锁,M6c 加 gating)
+- **初始 review_status = 'pending_review'**(M6b 加 G-12 sensitivity 检测 + auto-approve 阈值)
+- **关联**:G-8、§7.10.4 D、§5(动态相对加权)
+
+### H-31 ☑ B-9 覆盖 = self-reference 3 步事务(避开 FK + UQ chicken-and-egg)
+- **冲突**:
+  - UQ `uq_ratings_one_current` 在 `(account_id, supervisor_id, dim) WHERE superseded_by IS NULL` 上
+  - FK `ratings_superseded_by_fkey` 要求 `superseded_by` 引用真实 ratings 行
+  - 朴素做法:UPDATE old SET superseded_by=new_id 再 INSERT new — 但 INSERT 时 new_id 还没生成
+- **朴素 placeholder 法失败**:用 nil UUID 或 v4 placeholder 都触发 FK 违反(要么 nil 不存在,要么 v4 还没在表里)
+- **修法(self-reference 3 步,全在 1 个事务)**:
+  ```
+  1. UPDATE ratings SET superseded_by = id WHERE id = $old_id
+     ↑ 旧行自己引自己,FK 满足(行存在),UQ 满足(superseded_by 非 NULL)
+  2. INSERT new (...) RETURNING id
+     ↑ UQ slot 已空(老行 superseded_by 非 NULL),INSERT 成功
+  3. UPDATE ratings SET superseded_by = $new_id WHERE id = $old_id
+     ↑ 把老行的 self-ref 改成真 new_id,完成 B-9 chain
+  COMMIT
+  ```
+- **窗口**:步骤 1-3 之间,老行 superseded_by 暂时指向自己 — /me 用 `WHERE superseded_by IS NULL` 读,新行总是 current,审计链 100% 正确
+- **不需改 schema** / 不需 deferrable constraint
+- **关联**:H-30
+
+### H-32 ☑ discipline_hash = 评分时刻的快照(不是 JOIN 实时算)
+- **场景**:rater 申报学科是 CS,后来改成 Math,他对 2024 年 CS supervisor 的评分仍应按"CS 学科相关性"加权
+- **修法**:`ratings.discipline_hash` 存 `accounts.discipline_hash` 的提交时快照(不是 FK 到 accounts)
+- **写时机**:rating submission 时 `account_repo.find_discipline_hash(account_id)` 读一次
+- **聚合用法**:`JOIN ratings ON supervisor_id JOIN accounts ON discipline_hash = ...`(M7 aggregation 阶段)
+- **关联**:§5、OUTLINE §3 学科相关性
+
 ---
 
 ## I. 运营

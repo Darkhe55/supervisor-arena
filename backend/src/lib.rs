@@ -14,6 +14,7 @@ pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod observability;
+pub mod rating;
 pub mod supervisor;
 
 use anyhow::Result;
@@ -74,7 +75,11 @@ fn build_router(state: AppState) -> Router {
         .route("/health/crypto", get(health_crypto))
         .route("/version", get(version))
         .nest("/auth", account::handler::auth_router())
-        .nest("/supervisors", supervisor::handler::supervisor_router())
+        .nest(
+            "/supervisors",
+            supervisor::handler::supervisor_router()
+                .merge(rating::handler::rating_router()),
+        )
         .with_state(state)
 }
 
