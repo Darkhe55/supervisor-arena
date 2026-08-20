@@ -74,6 +74,10 @@ backend/.env.local
 backend/coverage/
 backend/tarpaulin-report.html
 
+# ---- Local debug backups ----
+_backup_pre_*.bak
+.env.legacy.bak
+
 # ---- C / C++ build ----
 *.o
 *.obj

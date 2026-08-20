@@ -456,6 +456,20 @@
   - 失去 `sqlx::FromRow` 派生(自己写 `From<&Row>` 或在 repo 层定义)
 - **关联**:H-1(后端 Rust)、H-2(数据库 PostgreSQL)
 
+### H-12 ☑ Postgres 端口 = 5433(避免本地 PG 冲突)
+- **问题**:Windows host 上有 `postgresql-x64-16` 服务(自动启动),绑 `0.0.0.0:5432`
+- **影响**:Docker `5432:5432` port mapping 静默被本地服务 shadow,host 上 `localhost:5432` 实际连到本地 PG,密码/dataset 全错;TCP 握手能完成但 PG protocol 协商会卡死(因为本地 PG 用 scram-sha-256 而 docker 里 db user 的密码哈希对不上)。从 host 看像"hang"或"password auth fail"
+- **修法**:docker-compose 改 `"5433:5432"`,`DATABASE__URL` 同步用 5433
+- **未来**:生产用 Unix socket 或 k8s Service,不会撞
+- **关联**:H-11、I-1(本地开发体验)
+
+### H-13 ☑ env 变量命名 = `__` 双下划线嵌套
+- **问题**:`config::Environment::default().separator("__")` 意味着 `DATABASE__URL` 才映射到 `database.url` 嵌套 key;单下划线的 `DATABASE_URL` 不会被识别,set_default 默认值生效
+- **隐藏 bug 模式**:默认值碰巧能用(比如 `localhost:5432` 跟旧 docker 一致),改动 `DATABASE_URL` 切端口完全无效 — 程序继续用默认端口运行
+- **修法**:全部 env 变量改成 `__` 双下划线(`DATABASE__URL`, `AUTH__JWT__SECRET` 等),匹配 `config.rs` 的 separator
+- **判据**:改 .env 后 cargo run 输出 URL 没变,基本就是这个 bug
+- **关联**:H-11、config.rs
+
 ---
 
 ## I. 运营
