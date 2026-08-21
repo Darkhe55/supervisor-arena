@@ -167,4 +167,41 @@ impl AccountService {
     pub fn jwt(&self) -> &JwtService {
         &self.jwt
     }
+
+    /// Admin: mark an account as soft-removed (H-48 / OUTLINE §7.1).
+    /// The user's existing ratings are kept on disk for audit; the
+    /// aggregation layer filters them out via JOIN.
+    ///
+    /// # Authorization
+    /// M3 MVP: any authed user can call this (matches the supervisor
+    /// review pattern). M5+ will add a proper reviewer/admin role
+    /// check on the JWT tier claim.
+    pub async fn admin_set_soft_removed(
+        &self,
+        target_id: Uuid,
+        soft_removed: bool,
+    ) -> Result<(), AccountError> {
+        // Verify the target exists (clearer error than silent no-op).
+        let _ = self
+            .repo
+            .find_by_id(target_id)
+            .await?
+            .ok_or(AccountError::InvalidCredentials)?;
+        self.repo.set_soft_removed(target_id, soft_removed).await
+    }
+
+    /// Admin: mark an account as banned. Banned accounts cannot log
+    /// in and are excluded from aggregation.
+    pub async fn admin_set_banned(
+        &self,
+        target_id: Uuid,
+        is_banned: bool,
+    ) -> Result<(), AccountError> {
+        let _ = self
+            .repo
+            .find_by_id(target_id)
+            .await?
+            .ok_or(AccountError::InvalidCredentials)?;
+        self.repo.set_banned(target_id, is_banned).await
+    }
 }

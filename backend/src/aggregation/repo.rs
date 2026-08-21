@@ -22,9 +22,11 @@ impl RatingRepo {
         Self { pool }
     }
 
-    /// Fetch all approved ratings for a supervisor. The result is small
-    /// (one row per (account, dim) current row) — at most a few hundred
-    /// per supervisor for an active system.
+    /// Fetch all approved ratings for a supervisor, EXCLUDING rows from
+    /// accounts that have been soft-removed (teacher soft-remove) or
+    /// banned (E-1 / H-48). The result is small (one row per
+    /// (account, dim) current row) — at most a few hundred per
+    /// supervisor for an active system.
     pub async fn list_approved(
         &self,
         supervisor_id: Uuid,
@@ -32,10 +34,13 @@ impl RatingRepo {
         let c = self.pool.get().await?;
         let rows = c
             .query(
-                "SELECT dim, value FROM ratings
-                 WHERE supervisor_id = $1::uuid
-                   AND review_status = 'approved'
-                   AND superseded_by IS NULL",
+                "SELECT r.dim, r.value FROM ratings r
+                 JOIN accounts a ON a.id = r.account_id
+                 WHERE r.supervisor_id = $1::uuid
+                   AND r.review_status = 'approved'
+                   AND r.superseded_by IS NULL
+                   AND a.soft_removed = FALSE
+                   AND a.is_banned = FALSE",
                 &[&supervisor_id],
             )
             .await?;

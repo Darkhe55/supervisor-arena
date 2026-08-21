@@ -232,7 +232,9 @@ impl DisciplineRepo {
 
     /// Count distinct users with ≥ MIN_VOTER_RATINGS approved ratings in
     /// supervisors of `discipline`. This is the "active users" denominator
-    /// for the 60% threshold (OUTLINE §4.4).
+    /// for the 60% threshold (OUTLINE §4.4). Excludes soft-removed /
+    /// banned accounts (H-48) so a silenced teacher doesn't get to
+    /// single-handedly count toward the active-user denominator.
     pub async fn count_active_users_in_discipline(
         &self,
         discipline: &str,
@@ -244,9 +246,12 @@ impl DisciplineRepo {
                     SELECT r.account_id
                     FROM ratings r
                     JOIN supervisors s ON s.id = r.supervisor_id
+                    JOIN accounts a ON a.id = r.account_id
                     WHERE s.discipline = $1::text
                       AND r.review_status = 'approved'
                       AND r.superseded_by IS NULL
+                      AND a.soft_removed = FALSE
+                      AND a.is_banned = FALSE
                     GROUP BY r.account_id
                     HAVING COUNT(*) >= 3
                  ) AS u",
@@ -256,7 +261,9 @@ impl DisciplineRepo {
         Ok(row.get(0))
     }
 
-    /// Eligibility for a specific user: ≥ 3 approved ratings in this discipline?
+    /// Eligibility for a specific user: ≥ 3 approved ratings in this
+    /// discipline? Excludes ratings from soft-removed / banned
+    /// accounts (H-48).
     pub async fn user_is_eligible(
         &self,
         user_id: Uuid,
@@ -268,10 +275,13 @@ impl DisciplineRepo {
                 "SELECT (
                     SELECT COUNT(*) FROM ratings r
                     JOIN supervisors s ON s.id = r.supervisor_id
+                    JOIN accounts a ON a.id = r.account_id
                     WHERE r.account_id = $1::uuid
                       AND s.discipline = $2::text
                       AND r.review_status = 'approved'
                       AND r.superseded_by IS NULL
+                      AND a.soft_removed = FALSE
+                      AND a.is_banned = FALSE
                  ) >= 3",
                 &[&user_id, &discipline],
             )

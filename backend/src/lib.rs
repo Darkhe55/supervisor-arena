@@ -13,6 +13,11 @@
 //!   Phase 7: aggregation + public_api ✅
 //!   Phase 8: tests (unit + proptest + integration) ✅
 //!   Phase 9: discipline-adaptive weights (M2) ✅
+//!   Phase 10: anti-abuse + privacy (M3 — partial) ✅
+//!             - aggregation filters soft_removed / is_banned
+//!             - report (举报) module: submit / claim / resolve
+//!             (deferred: email-change destroy, anonymized export,
+//!              behavior fingerprinting — see H-48..H-50)
 
 pub mod account;
 pub mod aggregation;
@@ -22,6 +27,7 @@ pub mod db;
 pub mod discipline;
 pub mod observability;
 pub mod rating;
+pub mod report;
 pub mod supervisor;
 
 use anyhow::Result;
@@ -88,6 +94,7 @@ fn build_router(state: AppState) -> Router {
                 .merge(rating::handler::rating_router()),
         )
         .nest("/disciplines", discipline::handler::discipline_router())
+        .nest("/reports", report::handler::report_router())
         .with_state(state)
 }
 

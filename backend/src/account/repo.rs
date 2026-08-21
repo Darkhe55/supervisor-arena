@@ -171,6 +171,52 @@ impl AccountRepo {
             .map_err(|e| AccountError::Database(anyhow::anyhow!("touch: {e}")))?;
         Ok(())
     }
+
+    /// Set the `soft_removed` flag on an account. Used by the admin
+    /// endpoint to silently drop a teacher's votes (H-48 / OUTLINE
+    /// §7.1). The user's existing ratings are kept on disk (audit
+    /// trail); the aggregation query filters them out via JOIN.
+    pub async fn set_soft_removed(
+        &self,
+        id: Uuid,
+        soft_removed: bool,
+    ) -> Result<(), AccountError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("pool: {e}")))?;
+        client
+            .execute(
+                "UPDATE accounts SET soft_removed = $2::bool WHERE id = $1::uuid",
+                &[&id, &soft_removed],
+            )
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("set_soft_removed: {e}")))?;
+        Ok(())
+    }
+
+    /// Set the `is_banned` flag on an account. Banned accounts are
+    /// excluded from aggregation AND cannot log in (H-48).
+    pub async fn set_banned(
+        &self,
+        id: Uuid,
+        is_banned: bool,
+    ) -> Result<(), AccountError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("pool: {e}")))?;
+        client
+            .execute(
+                "UPDATE accounts SET is_banned = $2::bool WHERE id = $1::uuid",
+                &[&id, &is_banned],
+            )
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("set_banned: {e}")))?;
+        Ok(())
+    }
 }
 
 fn row_to_stored(row: Row) -> StoredAccount {

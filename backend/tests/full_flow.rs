@@ -625,6 +625,273 @@ async fn discipline_weight_below_threshold_does_not_apply() {
     );
 }
 
+// =========================================================================
+// M3 — Anti-Abuse + Privacy end-to-end
+// (OUTLINE §7 / DECISIONS G-3 / H-48..H-50)
+// =========================================================================
+
+#[tokio::test]
+#[serial]
+async fn report_full_flow_and_soft_removed_filter() {
+    use supervisor_arena::aggregation::AggregationService;
+    use supervisor_arena::report::{
+        ReportReason, ReportResolution, ReportService, SubmitReportRequest, TargetType,
+    };
+    use supervisor_arena::supervisor::repo::SupervisorRepo;
+    use chrono::{Duration, Utc};
+
+    let pool = setup().await;
+
+    // Set up: 1 supervisor + 2 raters. Rater A submits 2 ratings,
+    // Rater B submits 2 ratings (so the average before any removal
+    // is the mean of all 4 = (80+60+40+20)/4 = 50).
+    let sup_id = insert_supervisor(&pool, "M3-SUP", "CS", "CS", "approved", 10).await;
+    let rater_a = insert_account(&pool, "rater-a@example.com", "CS", "CS").await;
+    let rater_b = insert_account(&pool, "rater-b@example.com", "CS", "CS").await;
+    for (dim, val) in [("research", 80), ("resource", 60)] {
+        insert_rating(&pool, rater_a, sup_id, dim, val).await;
+    }
+    for (dim, val) in [("research", 40), ("tool", 20)] {
+        insert_rating(&pool, rater_b, sup_id, dim, val).await;
+    }
+
+    // Baseline: all 4 ratings count.
+    let agg = AggregationService::new(
+        supervisor_arena::aggregation::RatingRepo::new(pool.clone()),
+    );
+    let score = agg.compute(sup_id).await.unwrap();
+    assert_eq!(score.approved_rating_count, 4);
+    let baseline_composite = score.composite.unwrap();
+    // research (80+40)/2 = 60, resource 60, tool 20, others None
+    // composite (equal weights) = (60+60+20)/3 = 46.67
+    assert!(
+        (baseline_composite - 46.666).abs() < 0.1,
+        "baseline composite ≈ 46.67, got {baseline_composite}"
+    );
+
+    // Submit a report on one of rater_a's ratings (using the
+    // rating id — we need to look it up first).
+    let rating_id: Uuid = {
+        let c = pool.get().await.unwrap();
+        c.query_one(
+            "SELECT id FROM ratings WHERE account_id = $1::uuid AND supervisor_id = $2::uuid AND dim = 'research' LIMIT 1",
+            &[&rater_a, &sup_id],
+        )
+        .await.unwrap().get(0)
+    };
+
+    let report_svc = ReportService::new(supervisor_arena::report::ReportRepo::new(pool.clone()));
+    let report_id = report_svc
+        .submit_report(
+            rater_b, // B reports A
+            SubmitReportRequest {
+                target_type: TargetType::Rating,
+                target_id: rating_id,
+                reason: ReportReason::Defamation,
+                description: Some("unfair comparison to my advisor".into()),
+            },
+        )
+        .await
+        .expect("report submits cleanly");
+
+    // The same rater cannot report themselves (would be SelfReport).
+    let err = report_svc
+        .submit_report(
+            rater_a, // A tries to report own rating
+            SubmitReportRequest {
+                target_type: TargetType::Rating,
+                target_id: rating_id,
+                reason: ReportReason::Other,
+                description: None,
+            },
+        )
+        .await
+        .expect_err("self-report must be blocked");
+    assert!(matches!(err, supervisor_arena::report::ReportError::SelfReport));
+
+    // The reporter cannot report a non-existent target.
+    let err = report_svc
+        .submit_report(
+            rater_b,
+            SubmitReportRequest {
+                target_type: TargetType::Rating,
+                target_id: Uuid::new_v4(), // random
+                reason: ReportReason::Other,
+                description: None,
+            },
+        )
+        .await
+        .expect_err("unknown target must be rejected");
+    assert!(matches!(
+        err,
+        supervisor_arena::report::ReportError::TargetNotFound { .. }
+    ));
+
+    // Reviewer claims the report, then resolves with 'removed'.
+    // (Insert a real reviewer account because reports.reviewer_id
+    // has a FK to accounts.id.)
+    let reviewer = insert_account(&pool, "reviewer@example.com", "CS", "CS").await;
+    let detail = report_svc.claim(report_id, reviewer).await.unwrap();
+    assert_eq!(detail.status, "reviewing");
+    assert_eq!(detail.reviewer_id, Some(reviewer));
+    let resolved = report_svc
+        .resolve(report_id, reviewer, ReportResolution::NoAction, None)
+        .await
+        .unwrap();
+    assert_eq!(resolved.status, "resolved");
+    assert_eq!(resolved.resolution.as_deref(), Some("no_action"));
+
+    // Trying to resolve again fails (not in 'reviewing' anymore).
+    let err = report_svc
+        .resolve(report_id, reviewer, ReportResolution::Removed, None)
+        .await
+        .expect_err("re-resolving a resolved report must fail");
+    assert!(matches!(
+        err,
+        supervisor_arena::report::ReportError::ReportNotFound(_)
+    ));
+
+    // Now mark rater_a as soft_removed and verify the aggregation
+    // excludes their 2 ratings.
+    let acct_repo = supervisor_arena::account::repo::AccountRepo::new(pool.clone());
+    acct_repo.set_soft_removed(rater_a, true).await.unwrap();
+
+    let score = agg.compute(sup_id).await.unwrap();
+    // Only rater_b's 2 ratings (research=40, tool=20) should remain.
+    assert_eq!(
+        score.approved_rating_count, 2,
+        "soft-removed rater's 2 ratings must be filtered out"
+    );
+    assert_eq!(score.radar.research, Some(40.0));
+    assert_eq!(score.radar.resource, None);
+    assert_eq!(score.radar.tool, Some(20.0));
+
+    // Un-soft-remove and confirm the ratings come back.
+    acct_repo.set_soft_removed(rater_a, false).await.unwrap();
+    let score = agg.compute(sup_id).await.unwrap();
+    assert_eq!(score.approved_rating_count, 4);
+
+    // Mark rater_b as banned and verify the same filtering.
+    acct_repo.set_banned(rater_b, true).await.unwrap();
+    let score = agg.compute(sup_id).await.unwrap();
+    assert_eq!(
+        score.approved_rating_count, 2,
+        "banned rater's 2 ratings must be filtered out"
+    );
+    assert_eq!(score.radar.research, Some(80.0));
+    assert_eq!(score.radar.tool, None);
+    acct_repo.set_banned(rater_b, false).await.unwrap();
+
+    // SLA breach test: set the report's submitted_at into the past
+    // beyond 24h, then verify sla_breached=true for a still-pending
+    // report. Insert a new report and check via summarize().
+    let rep_id = report_svc
+        .submit_report(
+            rater_a,
+            SubmitReportRequest {
+                target_type: TargetType::Supervisor,
+                target_id: sup_id,
+                reason: ReportReason::Other,
+                description: None,
+            },
+        )
+        .await
+        .unwrap();
+    // Backdate via raw SQL.
+    {
+        let c = pool.get().await.unwrap();
+        c.execute(
+            "UPDATE reports SET submitted_at = NOW() - INTERVAL '48 hours', sla_deadline = NOW() - INTERVAL '24 hours' WHERE id = $1::uuid",
+            &[&rep_id],
+        )
+        .await.unwrap();
+    }
+    let detail = report_svc.get(rep_id).await.unwrap().unwrap();
+    assert!(detail.sla_breached, "24h-overdue pending report must be breached");
+    // (sanity) status still pending, not resolved.
+    assert_eq!(detail.status, "pending");
+    // Drop the unused Duration/Utc imports to keep the use list tidy.
+    let _ = Utc::now() - Duration::seconds(0);
+
+    // Quiet unused import warnings (SupervisorRepo is not used here
+    // directly but imported for clarity).
+    let _ = std::any::type_name::<SupervisorRepo>();
+}
+
+#[tokio::test]
+#[serial]
+async fn report_self_report_blocked_and_oversized_text_rejected() {
+    use supervisor_arena::report::{
+        ReportReason, ReportService, SubmitReportRequest, TargetType,
+    };
+
+    let pool = setup().await;
+    let sup_id = insert_supervisor(&pool, "M3-SUP2", "CS", "CS", "approved", 10).await;
+    let acct = insert_account(&pool, "selfrep@example.com", "CS", "CS").await;
+    // Insert a rating owned by `acct`.
+    insert_rating(&pool, acct, sup_id, "research", 75).await;
+
+    // Look up the rating id.
+    let rating_id: Uuid = {
+        let c = pool.get().await.unwrap();
+        c.query_one(
+            "SELECT id FROM ratings WHERE account_id = $1::uuid LIMIT 1",
+            &[&acct],
+        )
+        .await.unwrap().get(0)
+    };
+
+    let svc = ReportService::new(supervisor_arena::report::ReportRepo::new(pool.clone()));
+
+    // Self-report on a rating you own → SelfReport.
+    let err = svc
+        .submit_report(
+            acct,
+            SubmitReportRequest {
+                target_type: TargetType::Rating,
+                target_id: rating_id,
+                reason: ReportReason::Defamation,
+                description: None,
+            },
+        )
+        .await
+        .expect_err("self-report must be blocked");
+    assert!(matches!(err, supervisor_arena::report::ReportError::SelfReport));
+
+    // Self-report on a supervisor you don't own is fine (no
+    // owner-account concept for supervisors).
+    let _ = svc
+        .submit_report(
+            acct,
+            SubmitReportRequest {
+                target_type: TargetType::Supervisor,
+                target_id: sup_id,
+                reason: ReportReason::Other,
+                description: None,
+            },
+        )
+        .await
+        .expect("supervisor self-report is allowed");
+
+    // Oversized description → TextTooLong.
+    let err = svc
+        .submit_report(
+            acct,
+            SubmitReportRequest {
+                target_type: TargetType::Rating,
+                target_id: rating_id,
+                reason: ReportReason::Defamation,
+                description: Some("x".repeat(2001)),
+            },
+        )
+        .await
+        .expect_err("oversized description must be rejected");
+    assert!(matches!(
+        err,
+        supervisor_arena::report::ReportError::TextTooLong(2001)
+    ));
+}
+
 // Simple FNV-1a hash for test fixtures. NOT a security primitive —
 // we use it to generate deterministic dummy email/discipline hashes for
 // test rows. Production uses HMAC-SHA256 from LocalKeyStore.

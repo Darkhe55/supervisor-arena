@@ -713,6 +713,50 @@
 - **风险**:活跃用户数从 5 长到 50 时,投票策略不变(不引入"参与度越高要求越严"的动态阈值,避免后加入者感觉规则在动)
 - **关联**:C-2、OUTLINE §4.4
 
+### H-48 🆕 ☑ soft_removed / is_banned 账号的评分在聚合层过滤(不动表)
+- **场景**(OUTLINE §7.1 + E-1):老师账号被软移除,系统应"静默丢弃其所有评分,不计入综合分"
+- **倾向**:**在所有读路径(aggregation / 学科活跃用户数 / 投票资格)上 `JOIN accounts` 过滤 `soft_removed=FALSE AND is_banned=FALSE`**,不改 ratings 表
+- **理由**:
+  - 软移除是可逆的(管理员可以重新激活),改 ratings 会丢失审计链
+  - 把"是否计入"做成读路径的 filter 让数据流单向(ratings 永远只 insert / update review_status / superseded_by)
+  - 同样的 JOIN 也挡住了 banned 账号的双重保险(被 ban 的人也无法登录)
+- **替代方案**:
+  - 软移除时 UPDATE ratings SET is_hidden = TRUE — 改表,审计链断裂
+  - DELETE FROM ratings WHERE account_id = $1 — 永久丢失,无法撤销
+- **影响的查询**:
+  - `aggregation::RatingRepo::list_approved` (M7 aggregation)
+  - `discipline::DisciplineRepo::count_active_users_in_discipline` (M2 投票门槛)
+  - `discipline::DisciplineRepo::user_is_eligible` (M2 投票资格)
+- **关联**:E-1, A-2
+
+### H-49 🆕 ☑ self-report 在 rating 目标上被阻断
+- **场景**:用户举报自己提交的 rating
+- **修法**:`report::service::submit_report` 对 rating / additional_info 目标检查 `target_account == reporter`,相同则 `SelfReport` (400)。supervisor 目标没有"作者"概念,所以不查
+- **理由**:
+  - 避免有人借举报来触发 review 流程(即使被驳回也会留 audit log 噪音)
+  - rating 是用户写的内容,可以"反悔"(重新提交),但举报是公共行为,不能让用户用举报自己的内容来刷"被举报率"等指标
+- **关联**:G-3
+
+### H-50 🆕 ☑ 举报 SLA = 24h, claim 后 SLA 状态重置
+- **场景**(M3 / OUTLINE §7.10.7):举报进入队列后多久没人处理算"过期"?
+- **倾向**:`sla_deadline = submitted_at + 24h`;`sla_breached = now() > sla_deadline AND status = 'pending'`
+- **理由**:
+  - 与 G-2 / §7.6 / review 模块的 workday SLA 一致
+  - `sla_breached` 只对 `pending` 状态为 true。`reviewing` 状态视为"已有人接手",即使 deadline 已过也不算 breached
+  - 这样 reviewer 列表的 UI 可以用 `sla_breached = true` 直接高亮超期未处理的
+- **关联**:G-3, OUTLINE §7.10.7
+
+### H-51 🆕 ☑ 举报模块 M3 MVP 不触发 rating / supervisor 的 side-effect
+- **场景**:举报 resolution 写"removed"时,要不要立即把 rating 设为 hidden / supervisor 设为 rejected?
+- **倾向**:**M3 只记录 resolution,不自动改目标状态**
+- **理由**:
+  - resolution 写入和目标状态修改是两个不同的写入,在分布式 / 失败场景下分开更易审计
+  - M3 的 MVP 阶段让 review 流程先跑通(状态机),目标 side-effect 等 M5+ 引入"moderation action"概念时再串起来
+  - 避免 reviewer 误点 "removed" 后立即把真实评分隐藏,留出可观察窗口
+- **关联**:G-3, M3 deferred
+
+---
+
 ### H-43 🆕 ☑ 权重变更 = 单 dim 提议 + 5 维均匀重平衡
 - **场景**:用户提交"research 应该 0.30" 这种提议时,其他 5 个 dim 怎么办?
 - **倾向 B**:均匀重平衡

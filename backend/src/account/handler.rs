@@ -4,6 +4,8 @@
 //! - `POST /auth/register` — body: RegisterRequest -> 201 AuthResponse
 //! - `POST /auth/login`    — body: LoginRequest    -> 200 AuthResponse
 //! - `GET  /auth/me`       — Authorization: Bearer ... -> 200 AccountResponse
+//! - `POST /auth/admin/soft-remove`  — admin: mark account soft-removed
+//! - `POST /auth/admin/ban`          — admin: ban / unban
 //!
 //! Error mapping:
 //! - `AccountError::InvalidEmail`       -> 400 with message
@@ -40,6 +42,8 @@ pub fn auth_router() -> Router<AppState> {
         .route("/register", post(register))
         .route("/login", post(login))
         .route("/me", get(me))
+        .route("/admin/soft-remove", post(admin_soft_remove))
+        .route("/admin/ban", post(admin_ban))
 }
 
 // --- Handlers ---
@@ -69,6 +73,39 @@ async fn me(
     let service = account_service(&state)?;
     let resp = service.get(auth.0).await?;
     Ok(Json(resp))
+}
+
+// --- Admin endpoints (H-48) ---
+
+#[derive(Debug, serde::Deserialize)]
+struct AdminTargetRequest {
+    target_id: Uuid,
+    /// `true` to enable the flag, `false` to clear it.
+    value: bool,
+}
+
+async fn admin_soft_remove(
+    State(state): State<AppState>,
+    _auth: AuthAccount,
+    Json(req): Json<AdminTargetRequest>,
+) -> Result<StatusCode, ApiError> {
+    let service = account_service(&state)?;
+    service
+        .admin_set_soft_removed(req.target_id, req.value)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn admin_ban(
+    State(state): State<AppState>,
+    _auth: AuthAccount,
+    Json(req): Json<AdminTargetRequest>,
+) -> Result<StatusCode, ApiError> {
+    let service = account_service(&state)?;
+    service
+        .admin_set_banned(req.target_id, req.value)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // --- Extractor for the Authorization header ---
