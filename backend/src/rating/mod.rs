@@ -30,6 +30,7 @@
 pub mod dto;
 pub mod error;
 pub mod handler;
+pub mod redaction;
 pub mod repo;
 pub mod service;
 pub mod sensitivity;
@@ -37,6 +38,7 @@ pub mod sensitivity;
 pub use dto::{MyRatingsResponse, RatingResponse, SubmitRatingRequest};
 pub use error::RatingError;
 pub use handler::rating_router;
+pub use redaction::redact_p1;
 pub use sensitivity::{SensitivityFlag, SensitivityError};
 pub use service::RatingService;
 

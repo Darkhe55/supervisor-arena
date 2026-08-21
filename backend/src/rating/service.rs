@@ -12,6 +12,7 @@ use super::dto::{
     MyRatingEntry, MyRatingsResponse, RatingOutcome, RatingResponse, SubmitRatingRequest,
 };
 use super::error::RatingError;
+use super::redaction::redact_p1;
 use super::repo::{RatingQueueEntry, RatingRepo, RatingRow};
 use super::sensitivity::{classify, SensitivityFlag};
 use super::DIMS;
@@ -91,7 +92,11 @@ impl RatingService {
                 RatingError::Database(anyhow::anyhow!("account {account_id} not found"))
             })?;
 
-        // 4. Encrypt optional P2 fields.
+        // 4. Encrypt optional P2 fields (original + redacted).
+        //    The redacted version is the public-safe copy: P1 markers
+        //    (lab/group/team) are replaced with [REDACTED]. M6c writes
+        //    both into the ratings table; the redacted_* columns power
+        //    the future public view (DECISIONS H-40).
         let field_key = self.keys.field_key();
         let dim_additional_enc = match &req.dim_additional {
             Some(s) => Some(aes::encrypt_str(
@@ -106,6 +111,25 @@ impl RatingService {
                 field_key,
                 s,
                 Some(b"ratings.overall_additional_enc"),
+            )?),
+            None => None,
+        };
+        // Redacted versions — same encryption + same AAD convention, but
+        // a different column to make the audit trail obvious. If the
+        // user didn't supply additional text, the redacted column is NULL.
+        let dim_additional_redacted_enc = match &req.dim_additional {
+            Some(s) => Some(aes::encrypt_str(
+                field_key,
+                &redact_p1(s),
+                Some(b"ratings.redacted_dim_additional_enc"),
+            )?),
+            None => None,
+        };
+        let overall_additional_redacted_enc = match &req.overall_additional {
+            Some(s) => Some(aes::encrypt_str(
+                field_key,
+                &redact_p1(s),
+                Some(b"ratings.redacted_overall_additional_enc"),
             )?),
             None => None,
         };
@@ -127,6 +151,8 @@ impl RatingService {
                     &discipline_hash,
                     dim_additional_enc.as_deref(),
                     overall_additional_enc.as_deref(),
+                    dim_additional_redacted_enc.as_deref(),
+                    overall_additional_redacted_enc.as_deref(),
                     req.additional_level.as_deref(),
                     &req.evidence,
                     Some(_old_id),
@@ -144,6 +170,8 @@ impl RatingService {
                     &discipline_hash,
                     dim_additional_enc.as_deref(),
                     overall_additional_enc.as_deref(),
+                    dim_additional_redacted_enc.as_deref(),
+                    overall_additional_redacted_enc.as_deref(),
                     req.additional_level.as_deref(),
                     &req.evidence,
                     None,

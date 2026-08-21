@@ -101,6 +101,12 @@ impl RatingRepo {
     /// row as the current (because the old row is no longer NULL superseded).
     ///
     /// If `existing_old_id` is None, just inserts (no supersede chain).
+    ///
+    /// M6c: also accepts the redacted_ versions of additional text (AES
+    /// encrypted, public-safe). These are written into the
+    /// `redacted_dim_additional_enc` / `redacted_overall_additional_enc`
+    /// columns so the public view can surface them.
+    #[allow(clippy::too_many_arguments)]
     pub async fn submit_with_supersede(
         &self,
         account_id: Uuid,
@@ -110,6 +116,8 @@ impl RatingRepo {
         discipline_hash: &[u8],
         dim_additional_enc: Option<&[u8]>,
         overall_additional_enc: Option<&[u8]>,
+        dim_additional_redacted_enc: Option<&[u8]>,
+        overall_additional_redacted_enc: Option<&[u8]>,
         additional_level: Option<&str>,
         evidence: &[String],
         existing_old_id: Option<Uuid>,
@@ -132,10 +140,12 @@ impl RatingRepo {
                 .query_one(
                     "INSERT INTO ratings
                         (account_id, supervisor_id, dim, value, discipline_hash,
-                         dim_additional_enc, overall_additional_enc, additional_level,
-                         evidence)
+                         dim_additional_enc, overall_additional_enc,
+                         redacted_dim_additional_enc, redacted_overall_additional_enc,
+                         additional_level, evidence)
                      VALUES ($1::uuid, $2::uuid, $3::text, $4, $5::bytea,
-                             $6::bytea, $7::bytea, $8::text, $9::text[])
+                             $6::bytea, $7::bytea, $8::bytea, $9::bytea,
+                             $10::text, $11::text[])
                      RETURNING id",
                     &[
                         &account_id as &(dyn ToSql + Sync),
@@ -145,6 +155,8 @@ impl RatingRepo {
                         &discipline_hash as &(dyn ToSql + Sync),
                         &dim_additional_enc as &(dyn ToSql + Sync),
                         &overall_additional_enc as &(dyn ToSql + Sync),
+                        &dim_additional_redacted_enc as &(dyn ToSql + Sync),
+                        &overall_additional_redacted_enc as &(dyn ToSql + Sync),
                         &additional_level as &(dyn ToSql + Sync),
                         &evidence_refs as &(dyn ToSql + Sync),
                     ],
@@ -166,10 +178,12 @@ impl RatingRepo {
                 .query_one(
                     "INSERT INTO ratings
                         (account_id, supervisor_id, dim, value, discipline_hash,
-                         dim_additional_enc, overall_additional_enc, additional_level,
-                         evidence)
+                         dim_additional_enc, overall_additional_enc,
+                         redacted_dim_additional_enc, redacted_overall_additional_enc,
+                         additional_level, evidence)
                      VALUES ($1::uuid, $2::uuid, $3::text, $4, $5::bytea,
-                             $6::bytea, $7::bytea, $8::text, $9::text[])
+                             $6::bytea, $7::bytea, $8::bytea, $9::bytea,
+                             $10::text, $11::text[])
                      RETURNING id",
                     &[
                         &account_id as &(dyn ToSql + Sync),
@@ -179,6 +193,8 @@ impl RatingRepo {
                         &discipline_hash as &(dyn ToSql + Sync),
                         &dim_additional_enc as &(dyn ToSql + Sync),
                         &overall_additional_enc as &(dyn ToSql + Sync),
+                        &dim_additional_redacted_enc as &(dyn ToSql + Sync),
+                        &overall_additional_redacted_enc as &(dyn ToSql + Sync),
                         &additional_level as &(dyn ToSql + Sync),
                         &evidence_refs as &(dyn ToSql + Sync),
                     ],
