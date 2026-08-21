@@ -58,7 +58,7 @@ async fn submit_vote(
             &req.dim,
             req.proposed_weight,
             req.reason.as_deref(),
-            auth.0,
+            auth.account_id,
         )
         .await?;
     Ok((StatusCode::CREATED, Json(vote_id)))
@@ -96,7 +96,11 @@ async fn cast_ballot(
     Json(req): Json<CastBallotRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let svc = service(&state)?;
-    let outcome = svc.cast_ballot(id, auth.0, req.choice).await?;
+    let outcome = svc.cast_ballot(id, auth.account_id, req.choice).await?;
+    // M3 §7.6: also rate-limit ballots? They're rarer than
+    // ratings but can still be abused. For M3 MVP we leave
+    // ballots un-rate-limited — the per-account daily rating
+    // limit already caps the worst case. M5+ can revisit.
     Ok(Json(json!({
         "vote_id": outcome.vote_id,
         "agree_count": outcome.agree_count,

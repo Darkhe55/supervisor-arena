@@ -23,6 +23,11 @@ pub enum RatingError {
     #[error("invalid evidence URL: {0}")]
     InvalidEvidence(String),
 
+    /// Daily / per-minute rate limit hit (M3 §7.6 / E-3). The handler
+    /// maps this to HTTP 429 with a `Retry-After` header.
+    #[error("rate limit hit: {kind}, retry in {retry_after_secs}s")]
+    RateLimited { kind: &'static str, retry_after_secs: u64 },
+
     #[error("database error")]
     Database(#[source] anyhow::Error),
 
@@ -63,5 +68,16 @@ impl From<tokio_postgres::Error> for RatingError {
             "pg: {e}{}",
             detail.map(|d| format!(" [{d}]")).unwrap_or_default()
         ))
+    }
+}
+
+impl From<crate::rate_limit::RateLimitError> for RatingError {
+    fn from(e: crate::rate_limit::RateLimitError) -> Self {
+        use crate::rate_limit::RateLimitError as R;
+        match e {
+            R::RateLimited { kind, retry_after_secs } => {
+                RatingError::RateLimited { kind, retry_after_secs }
+            }
+        }
     }
 }

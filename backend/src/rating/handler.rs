@@ -32,8 +32,19 @@ async fn submit_rating(
     auth: AuthAccount,
     Json(req): Json<SubmitRatingRequest>,
 ) -> Result<(StatusCode, Json<RatingResponse>), ApiError> {
+    // M3 §7.6 / E-3: per-account daily rating rate limit
+    // (basic=10/day, member=30/day). The check happens BEFORE
+    // we touch the DB so a banned/over-quota user gets an
+    // immediate 429 without paying for a DB write.
+    if let Err(e) = state
+        .rate_limit
+        .rating
+        .check_and_record(auth.account_id, &auth.tier)
+    {
+        return Err(ApiError(RatingError::from(e)));
+    }
     let svc = service(&state)?;
-    let resp = svc.submit(auth.0, &alias, req).await?;
+    let resp = svc.submit(auth.account_id, &alias, req).await?;
     let status = if resp.outcome == super::dto::RatingOutcome::Updated {
         StatusCode::OK // 200 for re-submit (supersede)
     } else {
@@ -48,7 +59,7 @@ async fn my_ratings(
     auth: AuthAccount,
 ) -> Result<Json<MyRatingsResponse>, ApiError> {
     let svc = service(&state)?;
-    let resp = svc.my_ratings(auth.0, &alias).await?;
+    let resp = svc.my_ratings(auth.account_id, &alias).await?;
     Ok(Json(resp))
 }
 
@@ -83,6 +94,7 @@ impl IntoResponse for ApiError {
             | RatingError::InvalidEvidence(_) => (StatusCode::BAD_REQUEST, "invalid_input"),
             RatingError::SupervisorNotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
             RatingError::SupervisorNotApproved(_) => (StatusCode::FORBIDDEN, "not_approved"),
+            RatingError::RateLimited { .. } => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
             RatingError::Database(_) | RatingError::Crypto(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
             }
@@ -90,11 +102,29 @@ impl IntoResponse for ApiError {
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = ?self.0, "internal error in rating handler");
         }
-        let body = if status == StatusCode::INTERNAL_SERVER_ERROR {
-            json!({ "error": code, "message": self.0.to_string() })
-        } else {
-            json!({ "error": code, "message": self.0.to_string() })
+        // For 429, surface the retry hint so the client can
+        // back off correctly.
+        let body = match &self.0 {
+            RatingError::RateLimited { kind, retry_after_secs } => {
+                json!({
+                    "error": code,
+                    "message": self.0.to_string(),
+                    "kind": kind,
+                    "retry_after_secs": retry_after_secs,
+                })
+            }
+            _ if status == StatusCode::INTERNAL_SERVER_ERROR => {
+                json!({ "error": code })
+            }
+            _ => json!({ "error": code, "message": self.0.to_string() }),
         };
-        (status, Json(body)).into_response()
+        let mut resp = (status, Json(body)).into_response();
+        if let RatingError::RateLimited { retry_after_secs, .. } = self.0 {
+            use axum::http::HeaderValue;
+            if let Ok(v) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+                resp.headers_mut().insert("Retry-After", v);
+            }
+        }
+        resp
     }
 }

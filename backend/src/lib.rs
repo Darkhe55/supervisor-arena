@@ -14,10 +14,12 @@
 //!   Phase 8: tests (unit + proptest + integration) ✅
 //!   Phase 9: discipline-adaptive weights (M2) ✅
 //!   Phase 10: anti-abuse + privacy (M3 — partial) ✅
-//!             - aggregation filters soft_removed / is_banned
+//!             - aggregation filters soft_removed / is_banned (H-48)
 //!             - report (举报) module: submit / claim / resolve
-//!             (deferred: email-change destroy, anonymized export,
-//!              behavior fingerprinting — see H-48..H-50)
+//!               (H-49..H-51)
+//!   Phase 11: rate limiting (M3 §7.6 / E-3) ✅
+//!             - per-account daily rating counter
+//!             - per-IP per-minute login counter
 
 pub mod account;
 pub mod aggregation;
@@ -25,8 +27,10 @@ pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod discipline;
+pub mod lookup;
 pub mod observability;
 pub mod rating;
+pub mod rate_limit;
 pub mod report;
 pub mod supervisor;
 
@@ -46,6 +50,7 @@ pub struct AppState {
     pub config: Arc<AppConfig>,
     pub db: Pool,
     pub keys: Arc<LocalKeyStore>,
+    pub rate_limit: rate_limit::RateLimitState,
 }
 
 pub async fn run(config: AppConfig) -> Result<()> {
@@ -63,6 +68,7 @@ pub async fn run(config: AppConfig) -> Result<()> {
         config: Arc::new(config.clone()),
         db,
         keys: Arc::new(keys),
+        rate_limit: rate_limit::RateLimitState::new(),
     };
 
     let app = build_router(state);
@@ -74,9 +80,14 @@ pub async fn run(config: AppConfig) -> Result<()> {
 
     info!(addr = %addr, "listening");
 
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| anyhow::anyhow!("server error: {e}"))?;
+    // into_make_service_with_connect_info makes the client SocketAddr
+    // available to the login handler (M3 §7.6 per-IP rate limit).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("server error: {e}"))?;
 
     Ok(())
 }
@@ -94,6 +105,7 @@ fn build_router(state: AppState) -> Router {
                 .merge(rating::handler::rating_router()),
         )
         .nest("/disciplines", discipline::handler::discipline_router())
+        .nest("/lookup", lookup::handler::lookup_router())
         .nest("/reports", report::handler::report_router())
         .with_state(state)
 }

@@ -46,7 +46,7 @@ async fn create_request(
     Json(req): Json<CreateSupervisorRequest>,
 ) -> Result<(StatusCode, Json<CreateSupervisorResponse>), ApiError> {
     let svc = service(&state)?;
-    let resp = svc.create_request(auth.0, req).await?;
+    let resp = svc.create_request(auth.account_id, req).await?;
     Ok((StatusCode::CREATED, Json(resp)))
 }
 
@@ -79,10 +79,10 @@ async fn review(
     let svc = service(&state)?;
     match action.action {
         super::dto::ReviewActionKind::Approve => {
-            svc.approve(id, _auth.0, action.notes.as_deref()).await?;
+            svc.approve(id, _auth.account_id, action.notes.as_deref()).await?;
         }
         super::dto::ReviewActionKind::Reject => {
-            svc.reject(id, _auth.0, action.notes.as_deref()).await?;
+            svc.reject(id, _auth.account_id, action.notes.as_deref()).await?;
         }
     }
     Ok(StatusCode::NO_CONTENT)

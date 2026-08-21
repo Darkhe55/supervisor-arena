@@ -58,7 +58,7 @@ async fn submit_report(
     Json(req): Json<SubmitReportRequest>,
 ) -> Result<(StatusCode, Json<Uuid>), ApiError> {
     let svc = service(&state)?;
-    let id = svc.submit_report(auth.0, req).await?;
+    let id = svc.submit_report(auth.account_id, req).await?;
     Ok((StatusCode::CREATED, Json(id)))
 }
 
@@ -101,7 +101,7 @@ async fn claim_report(
     Path(id): Path<Uuid>,
 ) -> Result<Json<ReportDetail>, ApiError> {
     let svc = service(&state)?;
-    let detail = svc.claim(id, auth.0).await?;
+    let detail = svc.claim(id, auth.account_id).await?;
     Ok(Json(detail))
 }
 
@@ -113,7 +113,7 @@ async fn resolve_report(
 ) -> Result<Json<ReportDetail>, ApiError> {
     let svc = service(&state)?;
     let detail = svc
-        .resolve(id, auth.0, req.resolution, req.note.as_deref())
+        .resolve(id, auth.account_id, req.resolution, req.note.as_deref())
         .await?;
     Ok(Json(detail))
 }
