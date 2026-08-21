@@ -15,17 +15,19 @@
 //! - `AccountError::InvalidCredentials` -> 401 (also /auth/me on missing acct)
 //! - `AccountError::InvalidToken`       -> 401
 //! - `AccountError::AccountUnavailable` -> 403
+//! - `AccountError::RateLimited`        -> 429
 //! - everything else                    -> 500 (logged, no detail leaked)
 
 use axum::{
     async_trait,
-    extract::{FromRequestParts, State},
-    http::{header, request::Parts, StatusCode},
+    extract::{ConnectInfo, FromRequestParts, State},
+    http::{header, request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde_json::json;
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 use super::dto::{AccountResponse, AuthResponse, LoginRequest, RegisterRequest};
@@ -42,6 +44,7 @@ pub fn auth_router() -> Router<AppState> {
         .route("/register", post(register))
         .route("/login", post(login))
         .route("/me", get(me))
+        .route("/cancel", post(cancel_account))
         .route("/admin/soft-remove", post(admin_soft_remove))
         .route("/admin/ban", post(admin_ban))
 }
@@ -59,8 +62,21 @@ async fn register(
 
 async fn login(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
+    // M3 §7.6 / E-3: per-IP per-minute login rate limit (5/min).
+    // We check BEFORE the DB lookup so a brute-force attempt
+    // doesn't pay for a bcrypt verify per request. The IP comes
+    // from X-Forwarded-For first hop, then connection peer.
+    let xff = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok());
+    let ip = crate::rate_limit::LoginRateLimiter::extract_ip(xff, Some(addr));
+    if let Err(e) = state.rate_limit.login.check_and_record(&ip) {
+        return Err(ApiError(AccountError::from(e)));
+    }
     let service = account_service(&state)?;
     let resp = service.login(req).await?;
     Ok(Json(resp))
@@ -71,7 +87,7 @@ async fn me(
     auth: AuthAccount,
 ) -> Result<Json<AccountResponse>, ApiError> {
     let service = account_service(&state)?;
-    let resp = service.get(auth.0).await?;
+    let resp = service.get(auth.account_id).await?;
     Ok(Json(resp))
 }
 
@@ -108,11 +124,29 @@ async fn admin_ban(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// M3 §7.4 — User-initiated account cancellation.
+///
+/// Anonymizes the account in place: clears PII, marks is_cancelled,
+/// sets cancelled_at. Existing ratings keep counting toward
+/// aggregation. The endpoint is irreversible — the user cannot
+/// "uncancel" via the public API.
+async fn cancel_account(
+    State(state): State<AppState>,
+    auth: AuthAccount,
+) -> Result<StatusCode, ApiError> {
+    let service = account_service(&state)?;
+    service.cancel_account(auth.account_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // --- Extractor for the Authorization header ---
 
 /// Extractor that pulls a Bearer token from `Authorization`, verifies it,
-/// and yields the account UUID. Returns 401 on any failure.
-pub struct AuthAccount(pub Uuid);
+/// and yields the account UUID + tier. Returns 401 on any failure.
+pub struct AuthAccount {
+    pub account_id: Uuid,
+    pub tier: String,
+}
 
 #[async_trait]
 impl FromRequestParts<AppState> for AuthAccount {
@@ -131,8 +165,12 @@ impl FromRequestParts<AppState> for AuthAccount {
             .ok_or(AccountError::InvalidToken)?;
 
         let service = account_service(state)?;
-        let id = service.jwt().verify_account_id(token)?;
-        Ok(AuthAccount(id))
+        let claims = service.jwt().verify(token)?;
+        let id = Uuid::parse_str(&claims.sub).map_err(|_| AccountError::MalformedSubject)?;
+        Ok(AuthAccount {
+            account_id: id,
+            tier: claims.tier,
+        })
     }
 }
 
@@ -172,7 +210,7 @@ impl IntoResponse for ApiError {
             AccountError::InvalidCredentials | AccountError::InvalidToken
             | AccountError::MalformedSubject => (StatusCode::UNAUTHORIZED, "unauthorized"),
             AccountError::AccountUnavailable => (StatusCode::FORBIDDEN, "unavailable"),
-            AccountError::RateLimited(_) => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
+            AccountError::RateLimited { .. } => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
             AccountError::Database(_) | AccountError::Crypto(_) | AccountError::Jwt(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
             }
@@ -183,12 +221,26 @@ impl IntoResponse for ApiError {
             tracing::error!(error = ?self.0, "internal error in account handler");
         }
 
-        let body = if status == StatusCode::INTERNAL_SERVER_ERROR {
-            json!({ "error": code })
-        } else {
-            // Surface the message for client errors (validation, auth).
-            json!({ "error": code, "message": self.0.to_string() })
+        // For 429, surface the kind + retry hint so the client can
+        // back off correctly. Other branches use the standard
+        // { error, message } body.
+        let body = match &self.0 {
+            AccountError::RateLimited { kind, retry_after_secs } => json!({
+                "error": code,
+                "message": self.0.to_string(),
+                "kind": kind,
+                "retry_after_secs": retry_after_secs,
+            }),
+            _ if status == StatusCode::INTERNAL_SERVER_ERROR => json!({ "error": code }),
+            _ => json!({ "error": code, "message": self.0.to_string() }),
         };
-        (status, Json(body)).into_response()
+        let mut resp = (status, Json(body)).into_response();
+        if let AccountError::RateLimited { retry_after_secs, .. } = self.0 {
+            use axum::http::HeaderValue;
+            if let Ok(v) = HeaderValue::from_str(&retry_after_secs.to_string()) {
+                resp.headers_mut().insert("Retry-After", v);
+            }
+        }
+        resp
     }
 }

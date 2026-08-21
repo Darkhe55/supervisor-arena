@@ -903,3 +903,148 @@ fn fnv_hash(bytes: &[u8]) -> Vec<u8> {
     }
     h.to_le_bytes().to_vec()
 }
+
+// =========================================================================
+// M3 §7.6 / E-3 — Rate limiting
+// =========================================================================
+
+#[test]
+fn rating_rate_limiter_blocks_after_basic_quota() {
+    use supervisor_arena::rate_limit::RatingRateLimiter;
+    use uuid::Uuid;
+
+    let l = RatingRateLimiter::new();
+    let id = Uuid::new_v4();
+    for i in 0..10 {
+        assert!(
+            l.check_and_record(id, "basic").is_ok(),
+            "call {i} should be allowed"
+        );
+    }
+    // 11th call → blocked (basic = 10/day)
+    match l.check_and_record(id, "basic") {
+        Err(supervisor_arena::rate_limit::RateLimitError::RateLimited {
+            kind,
+            ..
+        }) => assert_eq!(kind, "ratings_per_day"),
+        other => panic!("expected RateLimited ratings_per_day, got {other:?}"),
+    }
+}
+
+#[test]
+fn rating_rate_limiter_member_tier_gets_higher_quota() {
+    use supervisor_arena::rate_limit::RatingRateLimiter;
+    use uuid::Uuid;
+
+    let l = RatingRateLimiter::new();
+    let id = Uuid::new_v4();
+    // basic would be at 10/10 after 10 calls; member should still be
+    // at 10/30 after the same 10 calls.
+    for _ in 0..10 {
+        assert!(l.check_and_record(id, "member").is_ok());
+    }
+    assert_eq!(l.count_today(id), 10);
+    // Continue up to 30 — all should pass.
+    for _ in 0..20 {
+        assert!(l.check_and_record(id, "member").is_ok());
+    }
+    assert_eq!(l.count_today(id), 30);
+    // 31st → blocked.
+    assert!(l.check_and_record(id, "member").is_err());
+}
+
+#[test]
+fn login_rate_limiter_blocks_per_ip() {
+    use supervisor_arena::rate_limit::LoginRateLimiter;
+
+    let l = LoginRateLimiter::new();
+    for _ in 0..5 {
+        assert!(l.check_and_record("1.2.3.4").is_ok());
+    }
+    // 6th from same IP → blocked.
+    match l.check_and_record("1.2.3.4") {
+        Err(supervisor_arena::rate_limit::RateLimitError::RateLimited {
+            kind,
+            ..
+        }) => assert_eq!(kind, "login_per_min"),
+        other => panic!("expected RateLimited login_per_min, got {other:?}"),
+    }
+    // Different IP — independent.
+    assert!(l.check_and_record("5.6.7.8").is_ok());
+}
+
+#[test]
+fn login_rate_limiter_extracts_xff_first_hop() {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use supervisor_arena::rate_limit::LoginRateLimiter;
+
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 1234);
+    let ip = LoginRateLimiter::extract_ip(Some("203.0.113.5, 10.0.0.2"), Some(peer));
+    assert_eq!(ip, "203.0.113.5");
+    // Falls back to peer when XFF is missing.
+    let ip2 = LoginRateLimiter::extract_ip(None, Some(peer));
+    assert_eq!(ip2, "10.0.0.1");
+}
+
+// =========================================================================
+// M3 §7.4 — Account cancellation (anonymize-in-place, keep ratings)
+// =========================================================================
+
+#[tokio::test]
+#[serial]
+async fn account_cancellation_anonymizes_but_keeps_ratings_in_aggregation() {
+    use supervisor_arena::aggregation::AggregationService;
+
+    let pool = setup().await;
+
+    let account_id = insert_account(&pool, "cancel-me@example.com", "CS", "CS").await;
+    let sup_id = insert_supervisor(&pool, "CANCEL-SUP", "CS", "CS", "approved", 10).await;
+    insert_rating(&pool, account_id, sup_id, "research", 75).await;
+
+    let agg = AggregationService::new(supervisor_arena::aggregation::RatingRepo::new(
+        pool.clone(),
+    ));
+    let score_before = agg.compute(sup_id).await.unwrap();
+    assert_eq!(score_before.approved_rating_count, 1);
+    assert_eq!(score_before.radar.research, Some(75.0));
+
+    let acct_repo = supervisor_arena::account::repo::AccountRepo::new(pool.clone());
+    acct_repo
+        .anonymize_for_cancellation(account_id)
+        .await
+        .unwrap();
+
+    let row = acct_repo
+        .find_by_id(account_id)
+        .await
+        .unwrap()
+        .expect("account row should still exist");
+    assert!(row.is_cancelled, "is_cancelled must be true");
+    // is_banned stays FALSE: cancellation is its own state, distinct
+    // from admin ban. The login path checks is_cancelled separately.
+    assert!(!row.is_banned, "cancellation does NOT set is_banned");
+    assert!(row.email_hash.is_empty(), "email_hash should be cleared");
+    assert!(!row.soft_removed, "cancellation does NOT set soft_removed");
+
+    // Per OUTLINE §7.4 the cancelled user's rating still counts.
+    let score_after = agg.compute(sup_id).await.unwrap();
+    assert_eq!(
+        score_after.approved_rating_count, 1,
+        "cancelled account's rating must still count (per OUTLINE §7.4)"
+    );
+    assert_eq!(score_after.radar.research, Some(75.0));
+
+    // Once an admin also soft-removes, the rating drops out.
+    acct_repo.set_soft_removed(account_id, true).await.unwrap();
+    let score_removed = agg.compute(sup_id).await.unwrap();
+    assert_eq!(
+        score_removed.approved_rating_count, 0,
+        "soft_removed cancels the rating from aggregation"
+    );
+
+    // Calling anonymize_for_cancellation a second time is a no-op.
+    acct_repo
+        .anonymize_for_cancellation(account_id)
+        .await
+        .unwrap();
+}

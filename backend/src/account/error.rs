@@ -45,8 +45,14 @@ pub enum AccountError {
     AccountUnavailable,
 
     /// Rate limit hit (too many logins, registrations, etc.).
-    #[error("too many requests, retry in {0}s")]
-    RateLimited(u64),
+    /// Carries the kind (e.g. "login_per_min") and the suggested
+    /// retry-after in seconds — the handler surfaces these in the
+    /// 429 response body and `Retry-After` header.
+    #[error("too many requests, retry in {retry_after_secs}s (kind: {kind})")]
+    RateLimited {
+        kind: &'static str,
+        retry_after_secs: u64,
+    },
 
     /// Underlying DB error. Logged but never surfaced to the client
     /// (we return 500 with a generic message).
@@ -71,6 +77,20 @@ impl From<crate::crypto::CryptoError> for AccountError {
 impl From<jsonwebtoken::errors::Error> for AccountError {
     fn from(e: jsonwebtoken::errors::Error) -> Self {
         AccountError::Jwt(e)
+    }
+}
+
+impl From<crate::rate_limit::RateLimitError> for AccountError {
+    fn from(e: crate::rate_limit::RateLimitError) -> Self {
+        use crate::rate_limit::RateLimitError as R;
+        match e {
+            R::RateLimited { kind, retry_after_secs } => {
+                AccountError::RateLimited {
+                    kind,
+                    retry_after_secs,
+                }
+            }
+        }
     }
 }
 

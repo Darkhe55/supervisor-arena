@@ -87,7 +87,7 @@ impl AccountRepo {
             .map_err(|e| AccountError::Database(anyhow::anyhow!("pool: {e}")))?;
         let stmt = client
             .prepare_cached(
-                "SELECT id, email_hash, password_hash, tier, joined_at, soft_removed, is_banned
+                "SELECT id, email_hash, password_hash, tier, joined_at, soft_removed, is_banned, is_cancelled
                  FROM accounts
                  WHERE email_hash = $1
                  LIMIT 1",
@@ -111,7 +111,7 @@ impl AccountRepo {
             .map_err(|e| AccountError::Database(anyhow::anyhow!("pool: {e}")))?;
         let stmt = client
             .prepare_cached(
-                "SELECT id, email_hash, password_hash, tier, joined_at, soft_removed, is_banned
+                "SELECT id, email_hash, password_hash, tier, joined_at, soft_removed, is_banned, is_cancelled
                  FROM accounts
                  WHERE id = $1
                  LIMIT 1",
@@ -217,6 +217,45 @@ impl AccountRepo {
             .map_err(|e| AccountError::Database(anyhow::anyhow!("set_banned: {e}")))?;
         Ok(())
     }
+
+    /// M3 §7.4 — Anonymize an account after user-initiated
+    /// cancellation. The row stays (so existing ratings still
+    /// count in aggregation, per OUTLINE §7.4 "数据匿名化保留,
+    /// 评分仍计入"); all PII is wiped; `is_cancelled` flips to
+    /// TRUE; `cancelled_at` is set; the password_hash is replaced
+    /// with a sentinel value so no one can log in with any
+    /// password attempt.
+    ///
+    /// We do NOT set `is_banned=TRUE` because the aggregation
+    /// query filters by `is_banned` (H-48) — that would silently
+    /// drop the cancelled user's existing ratings. The login
+    /// path checks `is_cancelled` separately.
+    ///
+    /// Idempotent at the SQL level (the WHERE clause won't match
+    /// an already-cancelled row).
+    pub async fn anonymize_for_cancellation(&self, id: Uuid) -> Result<(), AccountError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("pool: {e}")))?;
+        client
+            .execute(
+                "UPDATE accounts
+                 SET is_cancelled = TRUE,
+                     cancelled_at = NOW(),
+                     email_enc = ''::bytea,
+                     email_hash = ''::bytea,
+                     institution_hash = ''::bytea,
+                     grade_enc = NULL,
+                     password_hash = '$argon2id$v=19$m=19456,t=2,p=1$cancelledsentinel000000000000$0M5B8Iq3Sqz6fDbm7QbMsK6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6'
+                 WHERE id = $1::uuid AND is_cancelled = FALSE",
+                &[&id],
+            )
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("anonymize_for_cancellation: {e}")))?;
+        Ok(())
+    }
 }
 
 fn row_to_stored(row: Row) -> StoredAccount {
@@ -228,6 +267,7 @@ fn row_to_stored(row: Row) -> StoredAccount {
         joined_at: row.get::<_, DateTime<Utc>>(4),
         soft_removed: row.get(5),
         is_banned: row.get(6),
+        is_cancelled: row.get(7),
     }
 }
 

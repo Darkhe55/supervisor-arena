@@ -38,6 +38,7 @@ pub struct StoredAccount {
     pub joined_at: chrono::DateTime<chrono::Utc>,
     pub soft_removed: bool,
     pub is_banned: bool,
+    pub is_cancelled: bool,
 }
 
 #[derive(Clone)]
@@ -203,5 +204,24 @@ impl AccountService {
             .await?
             .ok_or(AccountError::InvalidCredentials)?;
         self.repo.set_banned(target_id, is_banned).await
+    }
+
+    /// M3 §7.4 — Account cancellation (user-initiated, irreversible).
+    /// Anonymizes the account: clears all PII (email, institution,
+    /// grade) but keeps the row + the existing ratings so the
+    /// aggregated composite is preserved (per OUTLINE §7.4:
+    /// "数据匿名化保留, 评分仍计入, 身份消失").
+    pub async fn cancel_account(&self, user_id: Uuid) -> Result<(), AccountError> {
+        let acct = self
+            .repo
+            .find_by_id(user_id)
+            .await?
+            .ok_or(AccountError::InvalidCredentials)?;
+        if acct.is_cancelled {
+            // Idempotent.
+            return Ok(());
+        }
+        self.repo.anonymize_for_cancellation(user_id).await?;
+        Ok(())
     }
 }
