@@ -755,6 +755,13 @@
   - 避免 reviewer 误点 "removed" 后立即把真实评分隐藏,留出可观察窗口
 - **关联**:G-3, M3 deferred
 
+### H-52 🆕 ☑ .gitignore 行内注释 = 不允许(整行被当 pattern)
+- **场景**:`backend/.gitignore` 写了 `backend/.alice_token       # ephemeral JWT from curl E2E tests`
+- **bug**:git 把整行(含尾部注释)当 pattern,无法匹配 `backend/.alice_token`。文件持续 untracked,可被误 commit
+- **修法**:注释必须独立成行,pattern 行不留任何 `#` 之后的内容
+- **防御**:`git check-ignore -v <path>` 验证 pattern 真的命中后才算"被忽略"
+- **关联**:无
+
 ---
 
 ### H-43 🆕 ☑ 权重变更 = 单 dim 提议 + 5 维均匀重平衡
