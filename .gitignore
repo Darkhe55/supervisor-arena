@@ -109,3 +109,6 @@ todo-personal.md
 .cache/
 .parcel-cache/
 .eslintcache
+
+# ---- Proptest regression files (auto-generated on test failure) ----
+*.proptest-regressions

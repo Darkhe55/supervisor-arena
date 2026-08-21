@@ -21,7 +21,7 @@ fn parse_postgres_url(url: &str) -> Result<PgConfig> {
     PgConfig::from_str(url).map_err(|e| anyhow!("invalid DATABASE_URL: {e}"))
 }
 
-/// Build a Postgres connection pool
+/// Build a Postgres connection pool from a `DatabaseConfig` (production path).
 pub async fn build_pool(config: &DatabaseConfig) -> Result<Pool> {
     let pg_config = parse_postgres_url(&config.url)?;
 
@@ -67,6 +67,53 @@ pub async fn build_pool(config: &DatabaseConfig) -> Result<Pool> {
         min = config.min_connections,
         "PostgreSQL pool initialized"
     );
+
+    Ok(pool)
+}
+
+/// Build a Postgres pool directly from a `postgres://...` URL.
+///
+/// Used by integration tests (testcontainers) that don't have a
+/// `DatabaseConfig` from env vars. Uses sane default pool sizing.
+pub async fn build_pool_from_url(url: &str) -> Result<Pool> {
+    let pg_config = parse_postgres_url(url)?;
+
+    let mut pool_config = PoolConfig::new();
+    pool_config.host = pg_config.get_hosts().iter().find_map(|h| match h {
+        tokio_postgres::config::Host::Tcp(s) => Some(s.clone()),
+    });
+    pool_config.port = pg_config.get_ports().first().copied();
+    pool_config.user = pg_config.get_user().map(|s| s.to_string());
+    pool_config.password = pg_config.get_password().map(|b| {
+        String::from_utf8(b.to_vec()).unwrap_or_default()
+    });
+    pool_config.dbname = pg_config.get_dbname().map(|s| s.to_string());
+
+    pool_config.manager = Some(ManagerConfig {
+        recycling_method: RecyclingMethod::Fast,
+    });
+    pool_config.pool = Some(deadpool::managed::PoolConfig {
+        max_size: 10, // smaller pool for tests
+        timeouts: deadpool::managed::Timeouts {
+            wait: Some(Duration::from_secs(5)),
+            create: Some(Duration::from_secs(5)),
+            recycle: Some(Duration::from_secs(5)),
+        },
+        queue_mode: deadpool::managed::QueueMode::Fifo,
+    });
+
+    let pool = pool_config
+        .create_pool(Some(Runtime::Tokio1), NoTls)
+        .context("failed to create deadpool")?;
+
+    // Sanity check
+    {
+        let client = pool.get().await.context("failed to acquire test connection")?;
+        client
+            .query_one("SELECT 1", &[])
+            .await
+            .context("PostgreSQL sanity check failed")?;
+    }
 
     Ok(pool)
 }

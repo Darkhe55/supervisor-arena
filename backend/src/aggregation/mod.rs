@@ -41,7 +41,9 @@ pub mod repo;
 pub mod service;
 
 pub use repo::{ApprovedRating, RatingRepo};
-pub use service::{AggregationService, RadarDimensions, SupervisorScore};
+pub use service::{
+    compute_from_approved, AggregationService, RadarDimensions, SupervisorScore,
+};
 
 /// All 6 rating dimensions, in OUTLINE §3 display order.
 pub const RADAR_DIMS: &[&str] = &[

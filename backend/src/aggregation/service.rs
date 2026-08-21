@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use super::error::AggregationError;
 use super::repo::{ApprovedRating, RatingRepo};
+#[allow(unused_imports)]
 use super::RADAR_DIMS;
 
 /// Radar dimensions for the public view. Always has all 6 keys; values
