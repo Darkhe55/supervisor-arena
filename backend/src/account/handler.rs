@@ -57,6 +57,17 @@ async fn register(
 ) -> Result<(StatusCode, Json<AuthResponse>), ApiError> {
     let service = account_service(&state)?;
     let resp = service.register(req).await?;
+    // M6 §7.9.5 — log the encrypted-field access. We log AFTER
+    // the insert succeeds so failed registers don't leave a phantom
+    // audit row. Best-effort: the writer never propagates errors.
+    state.audit.log(crate::audit::EncryptionAccess {
+        field: "accounts.email_enc",
+        account_id: Some(resp.account_id),
+        accessor: "account::handler::register",
+        purpose: crate::audit::AuditPurpose::Login,
+        ip_hash: None,
+        success: true,
+    }).await;
     Ok((StatusCode::CREATED, Json(resp)))
 }
 
@@ -136,6 +147,16 @@ async fn cancel_account(
 ) -> Result<StatusCode, ApiError> {
     let service = account_service(&state)?;
     service.cancel_account(auth.account_id).await?;
+    // M6 §7.9.5 — cancellation is an irreversible encryption-
+    // related event; log it.
+    state.audit.log(crate::audit::EncryptionAccess {
+        field: "accounts.email_enc",
+        account_id: Some(auth.account_id),
+        accessor: "account::handler::cancel",
+        purpose: crate::audit::AuditPurpose::Cancellation,
+        ip_hash: None,
+        success: true,
+    }).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

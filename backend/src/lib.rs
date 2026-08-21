@@ -23,6 +23,7 @@
 
 pub mod account;
 pub mod aggregation;
+pub mod audit;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -51,6 +52,7 @@ pub struct AppState {
     pub db: Pool,
     pub keys: Arc<LocalKeyStore>,
     pub rate_limit: rate_limit::RateLimitState,
+    pub audit: audit::AuditLog,
 }
 
 pub async fn run(config: AppConfig) -> Result<()> {
@@ -66,9 +68,10 @@ pub async fn run(config: AppConfig) -> Result<()> {
     // Build state
     let state = AppState {
         config: Arc::new(config.clone()),
-        db,
+        db: db.clone(),
         keys: Arc::new(keys),
         rate_limit: rate_limit::RateLimitState::new(),
+        audit: audit::AuditLog::new(db),
     };
 
     let app = build_router(state);

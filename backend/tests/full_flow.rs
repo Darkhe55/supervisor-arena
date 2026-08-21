@@ -1048,3 +1048,103 @@ async fn account_cancellation_anonymizes_but_keeps_ratings_in_aggregation() {
         .await
         .unwrap();
 }
+
+// =========================================================================
+// M6 §7.9.5 — Encryption audit log
+// =========================================================================
+
+#[tokio::test]
+#[serial]
+async fn encryption_audit_log_writes_a_row_on_register_and_cancel() {
+    use supervisor_arena::audit::{AuditLog, AuditPurpose, EncryptionAccess};
+
+    let pool = setup().await;
+
+    // The audit log FK references accounts.id, so create a real
+    // account first to satisfy the constraint.
+    let acct_id = insert_account(&pool, "audit-me@example.com", "CS", "CS").await;
+    let audit = AuditLog::new(pool.clone());
+
+    let baseline: i64 = {
+        let c = pool.get().await.unwrap();
+        c.query_one("SELECT count(*) FROM encryption_audit_log", &[])
+            .await
+            .unwrap()
+            .get(0)
+    };
+
+    audit
+        .log(EncryptionAccess {
+            field: "accounts.email_enc",
+            account_id: Some(acct_id),
+            accessor: "test::smoke::register",
+            purpose: AuditPurpose::Login,
+            ip_hash: None,
+            success: true,
+        })
+        .await;
+    audit
+        .log(EncryptionAccess {
+            field: "accounts.email_enc",
+            account_id: Some(acct_id),
+            accessor: "test::smoke::cancel",
+            purpose: AuditPurpose::Cancellation,
+            ip_hash: None,
+            success: true,
+        })
+        .await;
+
+    let after: i64 = {
+        let c = pool.get().await.unwrap();
+        c.query_one("SELECT count(*) FROM encryption_audit_log", &[])
+            .await
+            .unwrap()
+            .get(0)
+    };
+    assert_eq!(after - baseline, 2, "expected exactly 2 new audit rows");
+
+    let cancel_rows: i64 = {
+        let c = pool.get().await.unwrap();
+        c.query_one(
+            "SELECT count(*) FROM encryption_audit_log
+             WHERE account_id = $1::uuid AND purpose = 'cancellation'",
+            &[&acct_id],
+        )
+        .await
+        .unwrap()
+        .get(0)
+    };
+    assert_eq!(cancel_rows, 1, "exactly one cancellation audit row");
+
+    let field: String = {
+        let c = pool.get().await.unwrap();
+        c.query_one(
+            "SELECT field_accessed FROM encryption_audit_log
+             WHERE account_id = $1::uuid LIMIT 1",
+            &[&acct_id],
+        )
+        .await
+        .unwrap()
+        .get(0)
+    };
+    assert_eq!(field, "accounts.email_enc");
+}
+
+#[test]
+fn audit_writer_smoke() {
+    use supervisor_arena::audit::{AuditPurpose, EncryptionAccess};
+    use uuid::Uuid;
+
+    // Pure constructor test: no DB. Confirms the public API
+    // shape (purpose strings, field names) stays stable.
+    let access = EncryptionAccess {
+        field: "ratings.overall_additional_enc",
+        account_id: Some(Uuid::new_v4()),
+        accessor: "test::unit::audit",
+        purpose: AuditPurpose::Submit,
+        ip_hash: Some(vec![0u8; 32]),
+        success: true,
+    };
+    assert_eq!(access.purpose.as_db_str(), "submit");
+    assert_eq!(access.field, "ratings.overall_additional_enc");
+}
