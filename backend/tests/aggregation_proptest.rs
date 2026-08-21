@@ -9,6 +9,7 @@
 
 use proptest::prelude::*;
 use supervisor_arena::aggregation::compute_from_approved;
+use supervisor_arena::aggregation::equal_weights;
 use supervisor_arena::aggregation::ApprovedRating;
 
 const DIMS: &[&str] = &[
@@ -39,7 +40,7 @@ fn ratings_strategy() -> impl Strategy<Value = Vec<ApprovedRating>> {
 proptest! {
     #[test]
     fn composite_is_non_negative_or_none(ratings in ratings_strategy()) {
-        let s = compute_from_approved(&ratings);
+        let s = compute_from_approved(&ratings, &equal_weights());
         if ratings.is_empty() {
             assert!(s.composite.is_none(), "empty → composite None");
         } else {
@@ -50,7 +51,7 @@ proptest! {
 
     #[test]
     fn count_matches_input_len(ratings in ratings_strategy()) {
-        let s = compute_from_approved(&ratings);
+        let s = compute_from_approved(&ratings, &equal_weights());
         assert_eq!(
             s.approved_rating_count,
             ratings.len(),
@@ -62,7 +63,7 @@ proptest! {
     fn radar_dimensions_within_clamped_input_range(ratings in ratings_strategy()) {
         // Algorithm invariant: per-dim mean is within [clamp(min, 0), clamp(max, 0)].
         // (Mean is clamped to >= 0 per H-33.)
-        let s = compute_from_approved(&ratings);
+        let s = compute_from_approved(&ratings, &equal_weights());
         for (i, &dim) in DIMS.iter().enumerate() {
             let input_values: Vec<i16> = ratings
                 .iter()
@@ -96,7 +97,7 @@ proptest! {
 
     #[test]
     fn all_six_dims_present_in_radar(ratings in ratings_strategy()) {
-        let s = compute_from_approved(&ratings);
+        let s = compute_from_approved(&ratings, &equal_weights());
         let json = serde_json::to_value(&s.radar).unwrap();
         let obj = json.as_object().unwrap();
         // All 6 keys present, even if null.
@@ -107,7 +108,7 @@ proptest! {
 
     #[test]
     fn composite_is_mean_of_present_dim_means(ratings in ratings_strategy()) {
-        let s = compute_from_approved(&ratings);
+        let s = compute_from_approved(&ratings, &equal_weights());
         // Skip empty / all-null cases (composite is None, nothing to compare).
         let present: Vec<f64> = [
             s.radar.research,
@@ -140,7 +141,7 @@ proptest! {
             dim: "research".to_string(),
             value,
         }];
-        let s = compute_from_approved(&ratings);
+        let s = compute_from_approved(&ratings, &equal_weights());
         assert_eq!(s.composite, Some(0.0), "negative {value} must clamp to 0");
         assert_eq!(s.radar.research, Some(0.0));
     }
@@ -151,8 +152,13 @@ proptest! {
             dim: "research".to_string(),
             value,
         }];
-        let s = compute_from_approved(&ratings);
-        assert_eq!(s.composite, Some(value as f64));
-        assert_eq!(s.radar.research, Some(value as f64));
+        let s = compute_from_approved(&ratings, &equal_weights());
+        // Float epsilon — weighted formula does (w * mean) / w, which can
+        // accumulate rounding error.
+        let expected = value as f64;
+        let c = s.composite.unwrap();
+        assert!((c - expected).abs() < 1e-9, "composite {c} != {expected}");
+        let r = s.radar.research.unwrap();
+        assert!((r - expected).abs() < 1e-9, "radar {r} != {expected}");
     }
 }

@@ -42,7 +42,7 @@ pub mod service;
 
 pub use repo::{ApprovedRating, RatingRepo};
 pub use service::{
-    compute_from_approved, AggregationService, RadarDimensions, SupervisorScore,
+    compute_from_approved, equal_weights, AggregationService, RadarDimensions, SupervisorScore,
 };
 
 /// All 6 rating dimensions, in OUTLINE §3 display order.

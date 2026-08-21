@@ -1,19 +1,25 @@
 //! supervisor-arena library crate
 //!
-//! Phase 1 scaffold — modules will be added incrementally:
+//! Phases 1-8 from the M1 MVP backend plan; M2 (Phase 9) is the
+//! discipline-adaptive weights layer per OUTLINE §4.4 / DECISIONS C-2 /
+//! H-42 / H-43.
+//!
+//!   Phase 1 scaffold ✅
 //!   Phase 2: db (migrations + connection pool) ✅ Plan B (deadpool-postgres + tokio-postgres)
 //!   Phase 3: crypto (AES-256-GCM + HMAC-SHA256 + Argon2id) ✅ LocalKeyStore
 //!   Phase 4: account (registration, login, JWT, /auth/me) ✅
-//!   Phase 5: supervisor + alias_generator
-//!   Phase 6: rating
-//!   Phase 7: aggregation + public_api
-//!   Phase 8: tests
+//!   Phase 5: supervisor + alias_generator ✅
+//!   Phase 6: rating (submit + sensitivity + P1 redaction) ✅
+//!   Phase 7: aggregation + public_api ✅
+//!   Phase 8: tests (unit + proptest + integration) ✅
+//!   Phase 9: discipline-adaptive weights (M2) ✅
 
 pub mod account;
 pub mod aggregation;
 pub mod config;
 pub mod crypto;
 pub mod db;
+pub mod discipline;
 pub mod observability;
 pub mod rating;
 pub mod supervisor;
@@ -81,6 +87,7 @@ fn build_router(state: AppState) -> Router {
             supervisor::handler::supervisor_router()
                 .merge(rating::handler::rating_router()),
         )
+        .nest("/disciplines", discipline::handler::discipline_router())
         .with_state(state)
 }
 

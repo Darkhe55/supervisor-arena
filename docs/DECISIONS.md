@@ -699,6 +699,68 @@
 - **不需改 schema** / 不需 deferrable constraint
 - **关联**:H-30
 
+### H-42 🆕 ☑ 学科权重投票阈值 = 60% 同意 + ≥3 票 + ≥5 活跃用户
+- **场景**(OUTLINE §4.4):同学科用户投票调整某个 dim 的权重,通过门槛是什么?
+- **倾向**:三条件 AND
+  - `agree_count >= 3` (避免 1-2 票刷过去,需要真实的多人同意)
+  - `active_users_in_discipline >= 5` (学科得有最低活跃基数,否则冷启动学科容易被几个人把控)
+  - `agree_count / (agree_count + disagree_count) >= 0.6` (OUTLINE §4.4 "得票 ≥ 60% 同学科活跃用户")
+- **理由**:`>= 60%` 是 OUTLINE 明确给的;前两个是我加的下限保护,避免:
+  - 1 个用户连投 2 次算 2 票(→ 一个用户独断)
+  - 学科只有 2-3 个用户也能通过投票(→ 寡头)
+- **active_users 的定义**:`COUNT(DISTINCT account_id FROM ratings JOIN supervisors ON s.discipline = $1 WHERE r.review_status = 'approved' AND r.superseded_by IS NULL GROUP BY account_id HAVING COUNT(*) >= 3)` — 即"在这个学科里有过 ≥3 条 approved 评分的不重复用户"
+- **bootstrap 跳过 cooldown**(H-42 子规则):`discipline_weights` 的 bootstrap 行(`source_vote_id IS NULL`)不计入 cooldown 计算。否则冷启动时任何人想投第一个真投票都会立刻被 cooldown 挡住。
+- **风险**:活跃用户数从 5 长到 50 时,投票策略不变(不引入"参与度越高要求越严"的动态阈值,避免后加入者感觉规则在动)
+- **关联**:C-2、OUTLINE §4.4
+
+### H-43 🆕 ☑ 权重变更 = 单 dim 提议 + 5 维均匀重平衡
+- **场景**:用户提交"research 应该 0.30" 这种提议时,其他 5 个 dim 怎么办?
+- **倾向 B**:均匀重平衡
+  - `new_research = 0.30`
+  - `others = (1 - 0.30) / 5 = 0.14` (每个)
+  - 总和 = 1.0
+- **理由**:每个投票只动一个 dim,简单可解释;权重总和 = 1.0 是"概率分布"的天然约束,避免下游需要重新归一化
+- **替代方案**:
+  - 比例重平衡(其他 5 个按当前比例缩放) — 难解释,会被"那为什么我提议 0.30 但 fit 缩水了"这种问题困住
+  - 让用户在提议里同时提交所有 6 个 — 投票粒度太粗,流失率会高
+- **公式**:`∀ dim d ∈ ALL_DIMS: w'[d] = if d == target then new_target else (1 - new_target) / (|ALL_DIMS| - 1)`
+- **关联**:H-42、OUTLINE §4.3 §4.4
+
+### H-44 🆕 ☑ 自我交易阻断 = proposer 不可在自己提议上投票
+- **场景**:用户 A 提了一个调高 research 的提议,自己又投 agree 票刷分
+- **修法**:`cast_ballot` 拒绝 `voter_id == proposer_id`,返回 `DisciplineError::SelfBallot` (403)
+- **理由**:即使允许"自己同意自己的提案看起来没意义",也要明确阻断,避免有人借脚本刷高权重
+- **关联**:H-42
+
+### H-45 🆕 ☑ 公开投票详情(计数 + status)不暴露 voter 身份
+- **场景**:投票公开页要不要展示"谁投了同意"?
+- **倾向**:只暴露聚合(agree_count / disagree_count / status),不暴露 voter_id
+- **理由**:B-2 投票者匿名性。即便内部审计 log 里有 voter_id(F-9),也不通过 API 返回
+- **关联**:F-1 匿名
+
+### H-46 🆕 ☑ aggregation 加权 = renormalize-only-on-data-bearing-dims
+- **场景**(M2):compute composite 时,如何处理"该 dim 没有任何评分"的情况?
+- **倾向 B**:用 sum of (w[dim] * mean[dim]) / sum of (w[dim] for data-bearing dims)
+  - 分母只算"有数据"的 dim,避免 0 权重的 dim 把分母拉成 0
+  - 0 权重的 dim 也算 numerator (但 0 * x = 0,不影响)
+  - 全部 data-bearing dim 都是 0 权重 → 退化为 equal-weight 平均(防御性 fallback)
+- **替代**:
+  - 原始 equal 平均 (M7 默认) — 失去权重意义
+  - 重新分配缺失 dim 的权重到有数据的 dim — 改变了用户的投票意图
+- **关联**:H-43、M7 aggregation
+
+### H-47 🆕 ☑ 现有 `discipline_weight_votes.discipline_hash` BYTEA NOT NULL 列 = 保留 + 改语义
+- **场景**:M1 设计的 `discipline_hash` BYTEA 本意是"学科 hash"(P1 标记),但 M2 投票要按 code 查,直接 `WHERE discipline_hash = $1::bytea` 存 code 字节即可
+- **倾向**:复用该列(M2 投票的实际工作列),同时新增 `discipline_code TEXT NOT NULL DEFAULT ''` 作为新的主查询列
+- **理由**:
+  - 现有 `discipline_hash` 列存 `discipline.as_bytes().to_vec()` 也能 unique-filter,功能等价
+  - 但 BYTEA 不能直接 JOIN 到 `supervisors.discipline TEXT`,需要 `convert_from(hash, 'UTF8')`,每查询都做这个转换浪费
+  - 干脆加一个 TEXT 列做主查询,BYTEA 列继续写(满足 NOT NULL)但代码里不读
+- **风险**:表的"双字段"看起来冗余。后续清理 migration(>M7)会 DROP `discipline_hash`
+- **关联**:H-31, C-2
+
+---
+
 ### H-32 ☑ discipline_hash = 评分时刻的快照(不是 JOIN 实时算)
 - **场景**:rater 申报学科是 CS,后来改成 Math,他对 2024 年 CS supervisor 的评分仍应按"CS 学科相关性"加权
 - **修法**:`ratings.discipline_hash` 存 `accounts.discipline_hash` 的提交时快照(不是 FK 到 accounts)

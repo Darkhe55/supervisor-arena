@@ -1,12 +1,14 @@
 //! Supervisor business logic — orchestrates validation, crypto, repo, alias gen, k-anon.
 
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::aggregation::AggregationService;
 use crate::config::ReviewConfig;
 use crate::crypto::{aes, hmac, LocalKeyStore};
+use crate::discipline::DisciplineRepo;
 
 use super::alias::{AliasGenerator, AliasInput};
 use super::dto::{
@@ -25,6 +27,10 @@ pub struct SupervisorService {
     alias_gen: AliasGenerator,
     review_cfg: ReviewConfig,
     aggregation: AggregationService,
+    /// M2: source of per-discipline weights. Optional because
+    /// SupervisorService is also constructed in unit tests where we don't
+    /// have a discipline repo.
+    discipline_repo: Option<DisciplineRepo>,
 }
 
 impl SupervisorService {
@@ -41,7 +47,15 @@ impl SupervisorService {
             alias_gen,
             review_cfg,
             aggregation,
+            discipline_repo: None,
         }
+    }
+
+    /// Builder: attach a `DisciplineRepo` so the aggregation path can
+    /// use the live per-discipline weight map (M2).
+    pub fn with_discipline_repo(mut self, drepo: DisciplineRepo) -> Self {
+        self.discipline_repo = Some(drepo);
+        self
     }
 
     /// User-submitted request to create a supervisor entry.
@@ -249,9 +263,27 @@ impl SupervisorService {
             None => return Ok(None),
         };
         let visible = is_public_visible(&row);
+        // M2: pull per-discipline weights (if a DisciplineRepo is wired)
+        // and pass them to the aggregation. If the repo isn't wired
+        // (e.g. in unit tests) or the discipline has no rows yet, fall
+        // back to equal weights inside the aggregation service.
+        let weights: Option<HashMap<String, f64>> = match &self.discipline_repo {
+            Some(dr) => match dr.get_current_weights(&row.discipline).await {
+                Ok(rows) if rows.len() == 6 => Some(
+                    rows.iter().map(|w| (w.dim.clone(), w.weight)).collect(),
+                ),
+                Ok(_) => None, // less than 6 rows (shouldn't happen due to bootstrap)
+                Err(e) => {
+                    return Err(SupervisorError::Database(anyhow::anyhow!(
+                        "discipline weights: {e}"
+                    )));
+                }
+            },
+            None => None,
+        };
         let score = self
             .aggregation
-            .compute(row.id)
+            .compute_with_weights(row.id, weights.as_ref())
             .await
             .map_err(|e| SupervisorError::Database(anyhow::anyhow!("aggregation: {e}")))?;
         let rating_count = score.approved_rating_count as i32;
@@ -312,13 +344,30 @@ impl SupervisorService {
             .list_visible(discipline, college, K_ANON_THRESHOLD, limit, offset)
             .await?;
 
+        // M2: pull the per-discipline weight map once (all entries in
+        // this page are in the same discipline) and reuse for every row.
+        let weights: Option<HashMap<String, f64>> = match &self.discipline_repo {
+            Some(dr) => match dr.get_current_weights(discipline).await {
+                Ok(rows) if rows.len() == 6 => Some(
+                    rows.iter().map(|w| (w.dim.clone(), w.weight)).collect(),
+                ),
+                Ok(_) => None,
+                Err(e) => {
+                    return Err(SupervisorError::Database(anyhow::anyhow!(
+                        "discipline weights: {e}"
+                    )));
+                }
+            },
+            None => None,
+        };
+
         // Compute score + radar for each entry. M7c will cache this; for
         // now we recompute on every search call.
         let mut results = Vec::with_capacity(rows.len());
         for row in rows {
             let score = self
                 .aggregation
-                .compute(row.id)
+                .compute_with_weights(row.id, weights.as_ref())
                 .await
                 .map_err(|e| SupervisorError::Database(anyhow::anyhow!("aggregation: {e}")))?;
             results.push(SearchEntry {
