@@ -90,6 +90,22 @@ async fn login(
     }
     let service = account_service(&state)?;
     let resp = service.login(req).await?;
+    // M6 §7.9.5 — log the login (P1 fields accessed via JWT
+    // verification). ip_hash from XFF first hop, falls back to
+    // peer address.
+    let ip_hash = crate::audit::ip_hash_from(
+        xff,
+        Some(addr),
+        state.keys.hmac_key(),
+    );
+    state.audit.log(crate::audit::EncryptionAccess {
+        field: "accounts.password_hash",
+        account_id: Some(resp.account_id),
+        accessor: "account::handler::login",
+        purpose: crate::audit::AuditPurpose::Login,
+        ip_hash,
+        success: true,
+    }).await;
     Ok(Json(resp))
 }
 
@@ -99,6 +115,15 @@ async fn me(
 ) -> Result<Json<AccountResponse>, ApiError> {
     let service = account_service(&state)?;
     let resp = service.get(auth.account_id).await?;
+    // M6 §7.9.5 — /auth/me touches the encrypted PII read path.
+    state.audit.log(crate::audit::EncryptionAccess {
+        field: "accounts.email_enc",
+        account_id: Some(auth.account_id),
+        accessor: "account::handler::me",
+        purpose: crate::audit::AuditPurpose::Login,
+        ip_hash: None,
+        success: true,
+    }).await;
     Ok(Json(resp))
 }
 

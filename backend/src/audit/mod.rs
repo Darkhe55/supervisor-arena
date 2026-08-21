@@ -33,6 +33,8 @@
 //! - Log shipping to a SIEM
 //! - Retention policy (table grows unboundedly for now)
 
+pub mod context;
 pub mod writer;
 
+pub use context::ip_hash_from;
 pub use writer::{AuditLog, AuditPurpose, EncryptionAccess};
