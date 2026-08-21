@@ -5,8 +5,8 @@
 //! - `GET  /supervisors/{alias}/ratings/me`  — current account's existing ratings
 
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -30,6 +30,8 @@ async fn submit_rating(
     State(state): State<AppState>,
     Path(alias): Path<String>,
     auth: AuthAccount,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<SubmitRatingRequest>,
 ) -> Result<(StatusCode, Json<RatingResponse>), ApiError> {
     // M3 §7.6 / E-3: per-account daily rating rate limit
@@ -45,6 +47,21 @@ async fn submit_rating(
     }
     let svc = service(&state)?;
     let resp = svc.submit(auth.account_id, &alias, req).await?;
+    // M6 §7.9.5 — log every rating submit (P0 + P1 fields touched).
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    state.audit.log_with_ip(
+        crate::audit::EncryptionAccess {
+            field: "ratings.dim_additional_enc",
+            account_id: Some(auth.account_id),
+            accessor: "rating::handler::submit",
+            purpose: crate::audit::AuditPurpose::Submit,
+            ip_hash: None,
+            success: true,
+        },
+        xff,
+        Some(addr),
+        state.keys.hmac_key(),
+    ).await;
     let status = if resp.outcome == super::dto::RatingOutcome::Updated {
         StatusCode::OK // 200 for re-submit (supersede)
     } else {

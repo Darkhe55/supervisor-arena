@@ -53,6 +53,8 @@ pub fn auth_router() -> Router<AppState> {
 
 async fn register(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<AuthResponse>), ApiError> {
     let service = account_service(&state)?;
@@ -70,14 +72,20 @@ async fn register(
     // M6 §7.9.5 — log the encrypted-field access. We log AFTER
     // the insert succeeds so failed registers don't leave a phantom
     // audit row. Best-effort: the writer never propagates errors.
-    state.audit.log(crate::audit::EncryptionAccess {
-        field: "accounts.email_enc",
-        account_id: Some(resp.account_id),
-        accessor: "account::handler::register",
-        purpose: crate::audit::AuditPurpose::Login,
-        ip_hash: None,
-        success: true,
-    }).await;
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    state.audit.log_with_ip(
+        crate::audit::EncryptionAccess {
+            field: "accounts.email_enc",
+            account_id: Some(resp.account_id),
+            accessor: "account::handler::register",
+            purpose: crate::audit::AuditPurpose::Login,
+            ip_hash: None,
+            success: true,
+        },
+        xff,
+        Some(addr),
+        state.keys.hmac_key(),
+    ).await;
     Ok((StatusCode::CREATED, Json(resp)))
 }
 
@@ -103,37 +111,45 @@ async fn login(
     // M6 §7.9.5 — log the login (P1 fields accessed via JWT
     // verification). ip_hash from XFF first hop, falls back to
     // peer address.
-    let ip_hash = crate::audit::ip_hash_from(
+    state.audit.log_with_ip(
+        crate::audit::EncryptionAccess {
+            field: "accounts.password_hash",
+            account_id: Some(resp.account_id),
+            accessor: "account::handler::login",
+            purpose: crate::audit::AuditPurpose::Login,
+            ip_hash: None,
+            success: true,
+        },
         xff,
         Some(addr),
         state.keys.hmac_key(),
-    );
-    state.audit.log(crate::audit::EncryptionAccess {
-        field: "accounts.password_hash",
-        account_id: Some(resp.account_id),
-        accessor: "account::handler::login",
-        purpose: crate::audit::AuditPurpose::Login,
-        ip_hash,
-        success: true,
-    }).await;
+    ).await;
     Ok(Json(resp))
 }
 
 async fn me(
     State(state): State<AppState>,
     auth: AuthAccount,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
 ) -> Result<Json<AccountResponse>, ApiError> {
     let service = account_service(&state)?;
     let resp = service.get(auth.account_id).await?;
     // M6 §7.9.5 — /auth/me touches the encrypted PII read path.
-    state.audit.log(crate::audit::EncryptionAccess {
-        field: "accounts.email_enc",
-        account_id: Some(auth.account_id),
-        accessor: "account::handler::me",
-        purpose: crate::audit::AuditPurpose::Login,
-        ip_hash: None,
-        success: true,
-    }).await;
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    state.audit.log_with_ip(
+        crate::audit::EncryptionAccess {
+            field: "accounts.email_enc",
+            account_id: Some(auth.account_id),
+            accessor: "account::handler::me",
+            purpose: crate::audit::AuditPurpose::Login,
+            ip_hash: None,
+            success: true,
+        },
+        xff,
+        Some(addr),
+        state.keys.hmac_key(),
+    ).await;
     Ok(Json(resp))
 }
 
@@ -179,19 +195,27 @@ async fn admin_ban(
 async fn cancel_account(
     State(state): State<AppState>,
     auth: AuthAccount,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     let service = account_service(&state)?;
     service.cancel_account(auth.account_id).await?;
     // M6 §7.9.5 — cancellation is an irreversible encryption-
     // related event; log it.
-    state.audit.log(crate::audit::EncryptionAccess {
-        field: "accounts.email_enc",
-        account_id: Some(auth.account_id),
-        accessor: "account::handler::cancel",
-        purpose: crate::audit::AuditPurpose::Cancellation,
-        ip_hash: None,
-        success: true,
-    }).await;
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    state.audit.log_with_ip(
+        crate::audit::EncryptionAccess {
+            field: "accounts.email_enc",
+            account_id: Some(auth.account_id),
+            accessor: "account::handler::cancel",
+            purpose: crate::audit::AuditPurpose::Cancellation,
+            ip_hash: None,
+            success: true,
+        },
+        xff,
+        Some(addr),
+        state.keys.hmac_key(),
+    ).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

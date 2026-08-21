@@ -27,7 +27,7 @@
 //! - `Database`                 → 500 (logged, no detail leaked)
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -55,10 +55,27 @@ pub fn report_router() -> Router<AppState> {
 async fn submit_report(
     State(state): State<AppState>,
     auth: AuthAccount,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<SubmitReportRequest>,
 ) -> Result<(StatusCode, Json<Uuid>), ApiError> {
     let svc = service(&state)?;
     let id = svc.submit_report(auth.account_id, req).await?;
+    // M6 — report submission is review-related; log for audit.
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    state.audit.log_with_ip(
+        crate::audit::EncryptionAccess {
+            field: "ratings.additional_info",
+            account_id: Some(auth.account_id),
+            accessor: "report::handler::submit",
+            purpose: crate::audit::AuditPurpose::Review,
+            ip_hash: None,
+            success: true,
+        },
+        xff,
+        Some(addr),
+        state.keys.hmac_key(),
+    ).await;
     Ok((StatusCode::CREATED, Json(id)))
 }
 

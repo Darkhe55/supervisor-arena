@@ -267,10 +267,10 @@ impl AccountRepo {
                  SET is_cancelled = TRUE,
                      cancelled_at = NOW(),
                      email_enc = ''::bytea,
-                     email_hash = ''::bytea,
+                     email_hash = digest(id::text, 'sha256'),
                      institution_hash = ''::bytea,
                      grade_enc = NULL,
-                     password_hash = '$argon2id$v=19$m=19456,t=2,p=1$cancelledsentinel000000000000$0M5B8Iq3Sqz6fDbm7QbMsK6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6'
+                     password_hash = 'cancelled-sentinel-not-argon2-format'
                  WHERE id = $1::uuid AND is_cancelled = FALSE",
                 &[&id],
             )

@@ -79,6 +79,21 @@ impl AuditLog {
         }
     }
 
+    /// Convenience: derive the `ip_hash` from the request and log.
+    /// Use this from handlers that already have `HeaderMap` and
+    /// `ConnectInfo<SocketAddr>` extractors — those that don't
+    /// just call `log()` directly with `ip_hash: None`.
+    pub async fn log_with_ip(
+        &self,
+        mut access: EncryptionAccess,
+        xff: Option<&str>,
+        peer: Option<std::net::SocketAddr>,
+        hmac_key: &[u8; 32],
+    ) {
+        access.ip_hash = crate::audit::context::ip_hash_from(xff, peer, hmac_key);
+        self.log(access).await;
+    }
+
     async fn try_log(&self, access: &EncryptionAccess) -> Result<(), anyhow::Error> {
         let c = self.pool.get().await?;
         c.execute(

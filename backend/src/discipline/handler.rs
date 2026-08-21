@@ -9,8 +9,8 @@
 //! - `GET  /disciplines/:code/weights/history`        — history (audit + chart)
 
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -49,6 +49,8 @@ async fn submit_vote(
     State(state): State<AppState>,
     auth: AuthAccount,
     Path(code): Path<String>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<SubmitVoteRequest>,
 ) -> Result<(StatusCode, Json<Uuid>), ApiError> {
     let svc = service(&state)?;
@@ -64,14 +66,20 @@ async fn submit_vote(
     // M6 — weight-vote submit (reason field is plain text but the
     // operation is governance-related; we log the action for the
     // audit trail).
-    state.audit.log(crate::audit::EncryptionAccess {
-        field: "discipline_weight_votes.reason",
-        account_id: Some(auth.account_id),
-        accessor: "discipline::handler::submit_vote",
-        purpose: crate::audit::AuditPurpose::Review,
-        ip_hash: None,
-        success: true,
-    }).await;
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    state.audit.log_with_ip(
+        crate::audit::EncryptionAccess {
+            field: "discipline_weight_votes.reason",
+            account_id: Some(auth.account_id),
+            accessor: "discipline::handler::submit_vote",
+            purpose: crate::audit::AuditPurpose::Review,
+            ip_hash: None,
+            success: true,
+        },
+        xff,
+        Some(addr),
+        state.keys.hmac_key(),
+    ).await;
     Ok((StatusCode::CREATED, Json(vote_id)))
 }
 

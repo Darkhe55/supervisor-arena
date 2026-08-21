@@ -1023,7 +1023,13 @@ async fn account_cancellation_anonymizes_but_keeps_ratings_in_aggregation() {
     // is_banned stays FALSE: cancellation is its own state, distinct
     // from admin ban. The login path checks is_cancelled separately.
     assert!(!row.is_banned, "cancellation does NOT set is_banned");
-    assert!(row.email_hash.is_empty(), "email_hash should be cleared");
+    // email_hash is replaced with SHA256(id) so it remains NOT NULL
+    // UNIQUE — a unique-per-account sentinel that can't collide
+    // with another cancelled account's empty email hash.
+    assert!(
+        !row.email_hash.is_empty(),
+        "email_hash should be a unique sentinel (SHA256(id))"
+    );
     assert!(!row.soft_removed, "cancellation does NOT set soft_removed");
 
     // Per OUTLINE §7.4 the cancelled user's rating still counts.

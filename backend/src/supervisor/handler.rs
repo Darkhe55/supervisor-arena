@@ -13,7 +13,7 @@
 //!   AliasGeneration / Database / Crypto → 500 (logged)
 
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -43,19 +43,27 @@ pub fn supervisor_router() -> Router<AppState> {
 async fn create_request(
     State(state): State<AppState>,
     auth: AuthAccount,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<CreateSupervisorRequest>,
 ) -> Result<(StatusCode, Json<CreateSupervisorResponse>), ApiError> {
     let svc = service(&state)?;
     let resp = svc.create_request(auth.account_id, req).await?;
     // M6 — supervisor creation touches P0 fields (submitted_name_enc)
-    state.audit.log(crate::audit::EncryptionAccess {
-        field: "supervisor_name_mappings.submitted_name_enc",
-        account_id: Some(auth.account_id),
-        accessor: "supervisor::handler::create_request",
-        purpose: crate::audit::AuditPurpose::Submit,
-        ip_hash: None,
-        success: true,
-    }).await;
+    let xff = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok());
+    state.audit.log_with_ip(
+        crate::audit::EncryptionAccess {
+            field: "supervisor_name_mappings.submitted_name_enc",
+            account_id: Some(auth.account_id),
+            accessor: "supervisor::handler::create_request",
+            purpose: crate::audit::AuditPurpose::Submit,
+            ip_hash: None,
+            success: true,
+        },
+        xff,
+        Some(addr),
+        state.keys.hmac_key(),
+    ).await;
     Ok((StatusCode::CREATED, Json(resp)))
 }
 
