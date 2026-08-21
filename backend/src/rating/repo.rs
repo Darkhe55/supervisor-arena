@@ -272,6 +272,134 @@ impl RatingRepo {
             })
             .collect())
     }
+
+    /// M6b: set `sensitivity_flags` and (optionally) `review_status =
+    /// 'approved'` on a rating. If `sensitivity_flags` is `P0_strict`,
+    /// we leave the status as `pending_review` (regardless of caller);
+    /// otherwise we auto-approve when `auto_approve` is true.
+    ///
+    /// `reviewer_id` is the approving account (None for system auto-approval).
+    pub async fn apply_sensitivity(
+        &self,
+        rating_id: Uuid,
+        sensitivity_flags: &str,
+        auto_approve: bool,
+        reviewer_id: Option<Uuid>,
+    ) -> Result<(), RatingError> {
+        let c = self.pool.get().await?;
+        let is_p0 = sensitivity_flags == "P0_strict";
+        let new_status = if is_p0 {
+            "pending_review"
+        } else if auto_approve {
+            "approved"
+        } else {
+            "pending_review"
+        };
+        c.execute(
+            "UPDATE ratings
+             SET sensitivity_flags = $1::text,
+                 review_status = $2::text,
+                 review_started_at = COALESCE(review_started_at, NOW()),
+                 review_completed_at = CASE WHEN $2 = 'approved' THEN NOW() ELSE review_completed_at END,
+                 reviewer_id = COALESCE(reviewer_id, $3::uuid)
+             WHERE id = $4::uuid",
+            &[&sensitivity_flags, &new_status, &reviewer_id, &rating_id],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// M6b: manual approval by a reviewer.
+    pub async fn mark_approved(
+        &self,
+        rating_id: Uuid,
+        reviewer_id: Uuid,
+    ) -> Result<(), RatingError> {
+        let c = self.pool.get().await?;
+        c.execute(
+            "UPDATE ratings
+             SET review_status = 'approved',
+                 reviewer_id = $2::uuid,
+                 review_started_at = COALESCE(review_started_at, NOW()),
+                 review_completed_at = NOW()
+             WHERE id = $1::uuid",
+            &[&rating_id, &reviewer_id],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// M6b: manual rejection by a reviewer.
+    pub async fn mark_rejected(
+        &self,
+        rating_id: Uuid,
+        reviewer_id: Uuid,
+        notes: Option<&str>,
+    ) -> Result<(), RatingError> {
+        let c = self.pool.get().await?;
+        c.execute(
+            "UPDATE ratings
+             SET review_status = 'rejected',
+                 reviewer_id = $2::uuid,
+                 review_started_at = COALESCE(review_started_at, NOW()),
+                 review_completed_at = NOW(),
+                 review_notes = $3
+             WHERE id = $1::uuid",
+            &[&rating_id, &reviewer_id, &notes],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// M6b: list pending ratings (oldest first). For the reviewer queue.
+    pub async fn list_pending_ratings(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<RatingQueueEntry>, RatingError> {
+        let c = self.pool.get().await?;
+        let rows = c
+            .query(
+                "SELECT r.id, r.account_id, r.supervisor_id, r.dim, r.value,
+                        r.sensitivity_flags, r.created_at,
+                        s.public_code, s.discipline, s.college
+                 FROM ratings r
+                 JOIN supervisors s ON s.id = r.supervisor_id
+                 WHERE r.review_status = 'pending_review'
+                 ORDER BY r.created_at ASC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| RatingQueueEntry {
+                rating_id: r.get(0),
+                account_id: r.get(1),
+                supervisor_id: r.get(2),
+                supervisor_alias: r.get(7),
+                discipline: r.get(8),
+                college: r.get(9),
+                dim: r.get(3),
+                value: r.get(4),
+                sensitivity_flags: r.get(5),
+                created_at: r.get(6),
+            })
+            .collect())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RatingQueueEntry {
+    pub rating_id: Uuid,
+    pub account_id: Uuid,
+    pub supervisor_id: Uuid,
+    pub supervisor_alias: String,
+    pub discipline: String,
+    pub college: String,
+    pub dim: String,
+    pub value: i16,
+    pub sensitivity_flags: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]

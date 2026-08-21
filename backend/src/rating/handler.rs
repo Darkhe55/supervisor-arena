@@ -62,6 +62,7 @@ fn service(state: &AppState) -> Result<RatingService, ApiError> {
         supervisor_repo,
         account_repo,
         state.keys.clone(),
+        state.config.review.clone(),
     ))
 }
 

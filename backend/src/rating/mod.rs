@@ -1,40 +1,43 @@
 //! Rating module — Phase 6 (M6) of the project plan
 //!
-//! Implements OUTLINE §3-§6 (rating dimensions + slider + additional info)
-//! and §7.10.4 D (B-9 supersede relationship for repeat-rating).
+//! Implements OUTLINE §3-§6 (rating dimensions + slider + additional info),
+//! §7.10.4 D (B-9 supersede relationship for repeat-rating),
+//! and M6b sensitivity detection + auto-approval flow (G-12).
 //!
-//! Routes (mounted at /supervisors/{alias}/ratings/* in lib.rs):
+//! Routes (mounted under /supervisors in lib.rs):
 //! - `POST /supervisors/{alias}/ratings`     — submit a single-dim rating
 //! - `GET  /supervisors/{alias}/ratings/me`  — current account's existing ratings
+//! - `GET  /supervisors/ratings/review/queue` — reviewer: list pending ratings
+//! - `POST /supervisors/ratings/review/{id}`  — reviewer: approve | reject
 //!
-//! Scope (M6 first cut):
+//! Scope (M6 + M6b):
 //! - 6 dimensions hardcoded (matches CHECK constraint)
-//! - value in [-100, 100] (CHECK); negative scores always allowed here,
-//!   C-6 unlock logic is a future enhancement
+//! - value in [-100, 100] (CHECK); negative scores always allowed here
 //! - Optional P2 fields: dim_additional_enc, overall_additional_enc,
 //!   additional_level (L1-L4), evidence (URL array)
 //! - B-9: re-submitting the same (account, supervisor, dim) marks the old
 //!   row as superseded_by = new row id
 //! - Snapshot of rater's discipline_hash at submission time
-//!   (for aggregation weighting — see OUTLINE §5)
-//! - Initial review_status = 'pending_review'; M6b adds sensitivity
-//!   detection (P0/P1/P2 flags) + auto-approval flow
+//! - **M6b**: sensitivity detection on additional text (4 levels: Clean /
+//!   P2Warn / P1Redact / P0Strict), auto-approval when REVIEW__MODE =
+//!   auto_pass AND no P0 detected. Otherwise stays pending for human review.
 //!
-//! Deferred to M6b/M6c:
+//! Deferred to M6c:
 //! - Rate limiting (M3 anti-abuse integration)
-//! - Sensitivity filter (G-12) + auto-approve thresholds
-//! - Aggregation triggers (Phase 7 hooks)
-//! - Composite_score recompute on rating approve
+//! - Composite_score recompute on rating approve (background job)
+//! - P1 redaction write-back (M6b flags it; M6c writes the redacted_* cols)
 
 pub mod dto;
 pub mod error;
 pub mod handler;
 pub mod repo;
 pub mod service;
+pub mod sensitivity;
 
 pub use dto::{MyRatingsResponse, RatingResponse, SubmitRatingRequest};
 pub use error::RatingError;
 pub use handler::rating_router;
+pub use sensitivity::{SensitivityFlag, SensitivityError};
 pub use service::RatingService;
 
 /// The 6 rating dimensions, per OUTLINE §3.

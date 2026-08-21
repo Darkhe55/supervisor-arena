@@ -4,6 +4,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::account::repo::AccountRepo;
+use crate::config::ReviewConfig;
 use crate::crypto::{aes, LocalKeyStore};
 use crate::supervisor::repo::SupervisorRepo;
 
@@ -11,7 +12,8 @@ use super::dto::{
     MyRatingEntry, MyRatingsResponse, RatingOutcome, RatingResponse, SubmitRatingRequest,
 };
 use super::error::RatingError;
-use super::repo::{RatingRepo, RatingRow};
+use super::repo::{RatingQueueEntry, RatingRepo, RatingRow};
+use super::sensitivity::{classify, SensitivityFlag};
 use super::DIMS;
 
 const ADDITIONAL_LEVELS: &[&str] = &["L1", "L2", "L3", "L4"];
@@ -24,6 +26,7 @@ pub struct RatingService {
     supervisor_repo: SupervisorRepo,
     account_repo: AccountRepo,
     keys: Arc<LocalKeyStore>,
+    review_cfg: ReviewConfig,
 }
 
 impl RatingService {
@@ -32,12 +35,14 @@ impl RatingService {
         supervisor_repo: SupervisorRepo,
         account_repo: AccountRepo,
         keys: Arc<LocalKeyStore>,
+        review_cfg: ReviewConfig,
     ) -> Self {
         Self {
             rating_repo,
             supervisor_repo,
             account_repo,
             keys,
+            review_cfg,
         }
     }
 
@@ -147,6 +152,27 @@ impl RatingService {
             (id, RatingOutcome::Created)
         };
 
+        // M6b: sensitivity detection + auto-approval. Run the classifier
+        // on the optional additional text. If REVIEW__MODE = auto_pass AND
+        // no P0 detected, the row is set to 'approved' immediately
+        // (P1 / P2 / Clean all auto-approve). P0 → stays pending for
+        // human review.
+        let mut highest = SensitivityFlag::Clean;
+        if let Some(s) = &req.dim_additional {
+            highest = highest.max(classify(s));
+        }
+        if let Some(s) = &req.overall_additional {
+            highest = highest.max(classify(s));
+        }
+        let auto = matches!(
+            self.review_cfg.mode,
+            crate::config::ReviewMode::AutoPass
+        );
+        let _ = self
+            .rating_repo
+            .apply_sensitivity(new_id, highest.as_db_str(), auto, None)
+            .await;
+
         Ok(RatingResponse {
             rating_id: new_id,
             supervisor_id: sup.id,
@@ -190,6 +216,37 @@ impl RatingService {
             supervisor_alias: supervisor_alias.to_string(),
             ratings: entries,
         })
+    }
+
+    /// M6b: reviewer manually approves a pending rating.
+    pub async fn approve_rating(
+        &self,
+        rating_id: Uuid,
+        reviewer_id: Uuid,
+    ) -> Result<(), RatingError> {
+        self.rating_repo
+            .mark_approved(rating_id, reviewer_id)
+            .await
+    }
+
+    /// M6b: reviewer manually rejects a pending rating.
+    pub async fn reject_rating(
+        &self,
+        rating_id: Uuid,
+        reviewer_id: Uuid,
+        notes: Option<&str>,
+    ) -> Result<(), RatingError> {
+        self.rating_repo
+            .mark_rejected(rating_id, reviewer_id, notes)
+            .await
+    }
+
+    /// M6b: list pending ratings (oldest first). For the reviewer queue.
+    pub async fn pending_ratings(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<RatingQueueEntry>, RatingError> {
+        self.rating_repo.list_pending_ratings(limit).await
     }
 
     // --- Validators (pure, no I/O) ---
