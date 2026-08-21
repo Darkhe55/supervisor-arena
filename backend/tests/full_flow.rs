@@ -1148,3 +1148,121 @@ fn audit_writer_smoke() {
     assert_eq!(access.purpose.as_db_str(), "submit");
     assert_eq!(access.field, "ratings.overall_additional_enc");
 }
+
+// =========================================================================
+// M5 邀请试用 — Invitation codes
+// =========================================================================
+
+#[tokio::test]
+#[serial]
+async fn invitation_create_lookup_redeem_flow() {
+    use supervisor_arena::invitation::InvitationService;
+    use uuid::Uuid;
+
+    let pool = setup().await;
+    // The InvitationService needs an HMAC key. Use a fixed one
+    // (any 32 bytes — the dev keys work too but the test should
+    // be self-contained).
+    let svc = InvitationService::new(
+        supervisor_arena::invitation::InvitationRepo::new(pool.clone()),
+        [0x42u8; 32],
+    );
+
+    // 1. Create a code (no inviter — system-generated).
+    let (display_code, row) = svc
+        .create(None, 1, None, Some("test seed"))
+        .await
+        .unwrap();
+    assert_eq!(display_code.len(), 14); // 12 + 2 dashes
+    assert!(display_code.contains('-'));
+    assert_eq!(row.max_uses, 1);
+    assert_eq!(row.use_count, 0);
+    assert!(row.revoked_at.is_none());
+
+    // 2. Lookup by raw code (no dashes) — case-insensitive.
+    let raw_code = row.code.clone();
+    let looked_up = svc.lookup(&raw_code).await.unwrap();
+    assert!(looked_up.is_some());
+    let looked_up_lower = svc.lookup(&raw_code.to_ascii_lowercase()).await.unwrap();
+    assert_eq!(looked_up.unwrap().id, looked_up_lower.unwrap().id);
+
+    // 3. First redemption succeeds.
+    let redeemed = svc.redeem(&raw_code).await.unwrap();
+    assert_eq!(redeemed.use_count, 1);
+    assert_eq!(redeemed.id, row.id);
+
+    // 4. Second redemption on a single-use code → FullyUsed.
+    let err = svc.redeem(&raw_code).await.unwrap_err();
+    assert!(matches!(
+        err,
+        supervisor_arena::invitation::InvitationError::FullyUsed
+    ));
+
+    // 5. Lookup of a non-existent code → CodeNotFound.
+    let err = svc
+        .lookup("ZZZZZZZZZZZZ")
+        .await
+        .unwrap();
+    assert!(err.is_none());
+}
+
+#[tokio::test]
+#[serial]
+async fn invitation_multi_use_redemption_increments_count() {
+    use supervisor_arena::invitation::InvitationService;
+
+    let pool = setup().await;
+    let svc = InvitationService::new(
+        supervisor_arena::invitation::InvitationRepo::new(pool.clone()),
+        [0x42u8; 32],
+    );
+
+    // Create a code with max_uses=3
+    let (_code, row) = svc
+        .create(None, 3, None, Some("multi-use test"))
+        .await
+        .unwrap();
+    assert_eq!(row.max_uses, 3);
+
+    // Redeem 3 times — all should succeed.
+    for i in 1..=3 {
+        let r = svc.redeem(&row.code).await.unwrap();
+        assert_eq!(r.use_count, i);
+    }
+
+    // 4th redemption → FullyUsed
+    let err = svc.redeem(&row.code).await.unwrap_err();
+    assert!(matches!(
+        err,
+        supervisor_arena::invitation::InvitationError::FullyUsed
+    ));
+}
+
+#[tokio::test]
+#[serial]
+async fn invitation_expired_code_rejected() {
+    use chrono::{Duration, Utc};
+    use supervisor_arena::invitation::InvitationService;
+
+    let pool = setup().await;
+    let svc = InvitationService::new(
+        supervisor_arena::invitation::InvitationRepo::new(pool.clone()),
+        [0x42u8; 32],
+    );
+
+    // Create with an explicit past expiry.
+    let past = Utc::now() - Duration::hours(1);
+    let (_display, row) = svc
+        .create(None, 1, Some(past), Some("already expired"))
+        .await
+        .unwrap();
+    // `redeem` takes the raw (un-dashed) code from the row.
+    let err = svc.redeem(&row.code).await.unwrap_err();
+    match err {
+        supervisor_arena::invitation::InvitationError::Expired(ts) => {
+            let diff = (ts - past).num_seconds().abs();
+            assert!(diff < 5, "expected ~past, got {} sec diff", diff);
+        }
+        other => panic!("expected Expired, got {other:?}"),
+    }
+}

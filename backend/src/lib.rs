@@ -28,6 +28,7 @@ pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod discipline;
+pub mod invitation;
 pub mod lookup;
 pub mod observability;
 pub mod rating;
@@ -118,6 +119,7 @@ fn build_router(state: AppState) -> Router {
                 .merge(rating::handler::rating_router()),
         )
         .nest("/disciplines", discipline::handler::discipline_router())
+        .nest("/invitations", invitation::handler::invitation_router())
         .nest("/lookup", lookup::handler::lookup_router())
         .nest("/reports", report::handler::report_router())
         .with_state(state)
