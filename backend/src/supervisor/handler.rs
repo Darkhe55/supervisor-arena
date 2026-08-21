@@ -91,12 +91,14 @@ async fn review(
 // --- Helpers ---
 
 fn service(state: &AppState) -> Result<SupervisorService, ApiError> {
+    use crate::aggregation::{AggregationService, RatingRepo as AggRepo};
     use crate::config::ReviewConfig;
     let repo = SupervisorRepo::new(state.db.clone());
     let keys = state.keys.clone();
     let alias_gen = super::alias::AliasGenerator::from_keystore(&keys);
     let review_cfg: ReviewConfig = state.config.review.clone();
-    Ok(SupervisorService::new(repo, keys, alias_gen, review_cfg))
+    let aggregation = AggregationService::new(AggRepo::new(state.db.clone()));
+    Ok(SupervisorService::new(repo, keys, alias_gen, review_cfg, aggregation))
 }
 
 // --- Error wrapper ---

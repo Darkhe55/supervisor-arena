@@ -4,13 +4,14 @@ use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::aggregation::AggregationService;
 use crate::config::ReviewConfig;
 use crate::crypto::{aes, hmac, LocalKeyStore};
 
 use super::alias::{AliasGenerator, AliasInput};
 use super::dto::{
-    CreateSupervisorRequest, CreateSupervisorResponse, PendingReviewEntry,
-    SupervisorPublicView, SupervisorRequestStatus,
+    CreateSupervisorRequest, CreateSupervisorResponse, PendingReviewEntry, SearchEntry,
+    SearchResponse, SupervisorPublicView, SupervisorRequestStatus,
 };
 use super::error::SupervisorError;
 use super::repo::{SupervisorRepo, SupervisorRow};
@@ -23,6 +24,7 @@ pub struct SupervisorService {
     keys: Arc<LocalKeyStore>,
     alias_gen: AliasGenerator,
     review_cfg: ReviewConfig,
+    aggregation: AggregationService,
 }
 
 impl SupervisorService {
@@ -31,12 +33,14 @@ impl SupervisorService {
         keys: Arc<LocalKeyStore>,
         alias_gen: AliasGenerator,
         review_cfg: ReviewConfig,
+        aggregation: AggregationService,
     ) -> Self {
         Self {
             repo,
             keys,
             alias_gen,
             review_cfg,
+            aggregation,
         }
     }
 
@@ -231,6 +235,11 @@ impl SupervisorService {
     /// Public view of a supervisor by alias. Honors k-anonymity:
     /// if the supervisor is approved but k_count < threshold, we return
     /// the row but with `visible: false`.
+    ///
+    /// The score + radar are computed lazily from approved ratings via
+    /// the `AggregationService` (H-33). Until ratings are approved (M6b
+    /// adds the sensitivity filter / auto-approve flow), composite_score
+    /// will be `None` and radar dims will be `None`.
     pub async fn public_view_by_alias(
         &self,
         alias: &str,
@@ -239,18 +248,98 @@ impl SupervisorService {
             Some(r) => r,
             None => return Ok(None),
         };
-        let rating_count = self.repo.rating_count(row.id).await? as i32;
         let visible = is_public_visible(&row);
+        let score = self
+            .aggregation
+            .compute(row.id)
+            .await
+            .map_err(|e| SupervisorError::Database(anyhow::anyhow!("aggregation: {e}")))?;
+        let rating_count = score.approved_rating_count as i32;
         Ok(Some(SupervisorPublicView {
             alias: row.public_code,
             discipline: row.discipline,
             college: row.college,
             visible,
             k_anonymity_count: row.k_anonymity_count,
-            composite_score: row.composite_score,
+            composite_score: score.composite,
+            radar: score.radar,
             rating_count,
             created_at: row.created_at,
         }))
+    }
+
+    /// Public search by (discipline, college). Returns k-anon-gated entries
+    /// (only visible rows where k_count ≥ threshold). Ordered by
+    /// composite_score DESC NULLS LAST, then created_at DESC.
+    pub async fn search(
+        &self,
+        discipline: &str,
+        college: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<SearchResponse, SupervisorError> {
+        // Validate inputs.
+        if discipline.is_empty() || discipline.len() > 64 {
+            return Err(SupervisorError::InvalidInput("discipline".into()));
+        }
+        if college.is_empty() || college.len() > 64 {
+            return Err(SupervisorError::InvalidInput("college".into()));
+        }
+        if !(1..=100).contains(&limit) {
+            return Err(SupervisorError::InvalidInput("limit must be 1..=100".into()));
+        }
+        if !(0..=10000).contains(&offset) {
+            return Err(SupervisorError::InvalidInput("offset must be 0..=10000".into()));
+        }
+
+        // Validate discipline/college exist in lookup tables.
+        if !self.repo.discipline_exists(discipline).await? {
+            return Err(SupervisorError::UnknownDiscipline(discipline.to_string()));
+        }
+        if !self.repo.college_exists(college).await? {
+            return Err(SupervisorError::UnknownCollege(college.to_string()));
+        }
+
+        // Total count of approved+k-anon-passing entries in this bucket.
+        let total = self
+            .repo
+            .count_visible(discipline, college, K_ANON_THRESHOLD)
+            .await?;
+
+        // Page of visible rows.
+        let rows = self
+            .repo
+            .list_visible(discipline, college, K_ANON_THRESHOLD, limit, offset)
+            .await?;
+
+        // Compute score + radar for each entry. M7c will cache this; for
+        // now we recompute on every search call.
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let score = self
+                .aggregation
+                .compute(row.id)
+                .await
+                .map_err(|e| SupervisorError::Database(anyhow::anyhow!("aggregation: {e}")))?;
+            results.push(SearchEntry {
+                alias: row.public_code,
+                discipline: row.discipline,
+                college: row.college,
+                composite_score: score.composite,
+                radar: score.radar,
+                rating_count: score.approved_rating_count as i32,
+                created_at: row.created_at,
+            });
+        }
+
+        Ok(SearchResponse {
+            discipline: discipline.to_string(),
+            college: college.to_string(),
+            total,
+            limit,
+            offset,
+            results,
+        })
     }
 
     /// K-anonymity threshold (for handler to expose in headers / health).

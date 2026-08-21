@@ -299,6 +299,70 @@ impl SupervisorRepo {
             .await?;
         Ok(row.get(0))
     }
+
+    /// Public search helper: count of k-anon-passing entries in a (disc, coll) bucket.
+    pub async fn count_visible(
+        &self,
+        discipline: &str,
+        college: &str,
+        k_threshold: i32,
+    ) -> Result<i64, SupervisorError> {
+        let c = self.pool.get().await?;
+        let row = c
+            .query_one(
+                "SELECT COUNT(*) FROM supervisors
+                 WHERE review_status = 'approved'
+                   AND discipline = $1::text AND college = $2::text
+                   AND k_anonymity_count >= $3",
+                &[&discipline, &college, &k_threshold],
+            )
+            .await?;
+        Ok(row.get(0))
+    }
+
+    /// Public search helper: page of k-anon-passing entries.
+    /// Returns (id, public_code, discipline, college, created_at).
+    pub async fn list_visible(
+        &self,
+        discipline: &str,
+        college: &str,
+        k_threshold: i32,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<VisibleRow>, SupervisorError> {
+        let c = self.pool.get().await?;
+        let rows = c
+            .query(
+                "SELECT id, public_code, discipline, college, created_at
+                 FROM supervisors
+                 WHERE review_status = 'approved'
+                   AND discipline = $1::text AND college = $2::text
+                   AND k_anonymity_count >= $3
+                 ORDER BY created_at DESC
+                 LIMIT $4 OFFSET $5",
+                &[&discipline, &college, &k_threshold, &limit, &offset],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| VisibleRow {
+                id: r.get(0),
+                public_code: r.get(1),
+                discipline: r.get(2),
+                college: r.get(3),
+                created_at: r.get(4),
+            })
+            .collect())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct VisibleRow {
+    pub id: Uuid,
+    pub public_code: String,
+    pub discipline: String,
+    pub college: String,
+    pub created_at: DateTime<Utc>,
 }
 
 // --- Internal row types used by the repo ---

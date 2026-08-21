@@ -10,6 +10,7 @@
 //!   Phase 8: tests
 
 pub mod account;
+pub mod aggregation;
 pub mod config;
 pub mod crypto;
 pub mod db;
