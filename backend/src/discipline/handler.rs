@@ -61,6 +61,17 @@ async fn submit_vote(
             auth.account_id,
         )
         .await?;
+    // M6 — weight-vote submit (reason field is plain text but the
+    // operation is governance-related; we log the action for the
+    // audit trail).
+    state.audit.log(crate::audit::EncryptionAccess {
+        field: "discipline_weight_votes.reason",
+        account_id: Some(auth.account_id),
+        accessor: "discipline::handler::submit_vote",
+        purpose: crate::audit::AuditPurpose::Review,
+        ip_hash: None,
+        success: true,
+    }).await;
     Ok((StatusCode::CREATED, Json(vote_id)))
 }
 

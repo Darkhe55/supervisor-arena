@@ -1,6 +1,5 @@
 //! Audit log writer (best-effort, async).
 
-use chrono::{DateTime, Utc};
 use deadpool_postgres::Pool;
 use uuid::Uuid;
 
@@ -144,7 +143,5 @@ mod tests {
         assert!(a.ip_hash.is_none());
     }
 
-    // Suppress the chrono import in test builds.
-    #[allow(dead_code)]
-    fn _phantom(_: DateTime<Utc>) {}
+    // Suppress unused-import warnings in test builds (no chrono use here).
 }

@@ -47,6 +47,15 @@ async fn create_request(
 ) -> Result<(StatusCode, Json<CreateSupervisorResponse>), ApiError> {
     let svc = service(&state)?;
     let resp = svc.create_request(auth.account_id, req).await?;
+    // M6 — supervisor creation touches P0 fields (submitted_name_enc)
+    state.audit.log(crate::audit::EncryptionAccess {
+        field: "supervisor_name_mappings.submitted_name_enc",
+        account_id: Some(auth.account_id),
+        accessor: "supervisor::handler::create_request",
+        purpose: crate::audit::AuditPurpose::Submit,
+        ip_hash: None,
+        success: true,
+    }).await;
     Ok((StatusCode::CREATED, Json(resp)))
 }
 

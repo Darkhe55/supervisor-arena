@@ -3,7 +3,7 @@
 //! These are decoupled from the storage layer so the math is easy
 //! to unit-test.
 
-use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 
 /// The decision returned by a rate-limit check.
 #[derive(Debug, Clone, PartialEq, Eq)]

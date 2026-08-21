@@ -19,7 +19,6 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Duration, Utc};
 
-use super::counter::RateLimitDecision;
 use super::error::RateLimitError;
 
 const LIMIT_PER_MIN: u32 = 5;
