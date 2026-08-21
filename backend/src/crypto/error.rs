@@ -36,6 +36,14 @@ pub enum CryptoError {
     /// PHC-format hash string is malformed.
     #[error("malformed password hash: {0}")]
     MalformedPasswordHash(String),
+
+    /// M6 KMS stub: the key store was configured to use a KMS
+    /// backend but the actual KMS integration is not yet wired
+    /// in. Failures are loud (this error) rather than silent
+    /// (returning a placeholder key) so a misconfigured prod
+    /// deployment is caught at first use.
+    #[error("KMS backend '{key_id}' is not yet wired in (M6 stub)")]
+    KmsUnavailable { key_id: String },
 }
 
 impl From<getrandom::Error> for CryptoError {

@@ -2,12 +2,11 @@
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::aggregation::AggregationService;
 use crate::config::ReviewConfig;
-use crate::crypto::{aes, hmac, LocalKeyStore};
+use crate::crypto::{aes, hmac, SharedKeyStore};
 use crate::discipline::DisciplineRepo;
 
 use super::alias::{AliasGenerator, AliasInput};
@@ -23,7 +22,7 @@ const K_ANON_THRESHOLD: i32 = 10;
 #[derive(Clone)]
 pub struct SupervisorService {
     repo: SupervisorRepo,
-    keys: Arc<LocalKeyStore>,
+    keys: SharedKeyStore,
     alias_gen: AliasGenerator,
     review_cfg: ReviewConfig,
     aggregation: AggregationService,
@@ -36,7 +35,7 @@ pub struct SupervisorService {
 impl SupervisorService {
     pub fn new(
         repo: SupervisorRepo,
-        keys: Arc<LocalKeyStore>,
+        keys: SharedKeyStore,
         alias_gen: AliasGenerator,
         review_cfg: ReviewConfig,
         aggregation: AggregationService,

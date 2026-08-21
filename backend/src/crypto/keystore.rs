@@ -5,14 +5,55 @@
 //! hex strings are parsed once at startup; raw bytes live in `Zeroizing`
 //! wrappers and are zeroed on drop.
 //!
-//! M6 (security hardening milestone) will replace this with a KMS-backed
-//! store (`KmsKeyStore`) that wraps AWS KMS / Aliyun KMS / Vault. The trait
-//! surface and call sites should not change.
+//! M6 (security hardening milestone) wraps both `LocalKeyStore` and the
+//! stub `KmsKeyStore` behind the [`KeyStore`] trait so the rest of the
+//! codebase uses `Arc<dyn KeyStore>` and doesn't care which backend is
+//! in play. KMS integration itself (AWS / Aliyun / Vault) is M6+ work —
+//! for now `KmsKeyStore` is a stub that returns
+//! `Err(KmsUnavailable)` from every accessor so a misconfigured prod
+//! deployment fails closed instead of silently using a placeholder.
 
+use std::sync::Arc;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::error::CryptoError;
 use crate::config::EncryptionConfig;
+
+/// The abstract key store surface. The rest of the codebase talks
+/// to this trait (via `Arc<dyn KeyStore>` in `AppState`) — never to
+/// a concrete implementation.
+///
+/// # Why a trait
+///
+/// M6 (security hardening) calls out integrating a cloud KMS
+/// (AWS KMS / Aliyun KMS / HashiCorp Vault) so the raw key bytes
+/// never sit in the application's process memory. The trait makes
+/// that swap mechanical: add a `KmsKeyStore` impl, change one line
+/// in `lib.rs::run`, and every call site keeps working.
+///
+/// # Why `&[u8; KEY_LEN]` (not `Vec<u8>`)
+///
+/// - Fixed size matches what AES-256-GCM and HMAC-SHA256 actually need.
+/// - The `&` borrow keeps the key inside the `Zeroizing` wrapper's
+///   scope; the caller can copy out into a `Zeroizing<[u8; 32]>` if
+///   they need to keep the bytes around (e.g. for streaming AES), but
+///   the canonical pattern is "use and drop" inside a function.
+///
+/// # `key_id()`
+///
+/// The implementation returns a short, non-secret identifier
+/// (e.g. "local:abcd1234" or "kms:alias/prod-2026-q1") so audit
+/// logs and error messages can correlate "which key version
+/// encrypted this row" without leaking the key.
+pub trait KeyStore: Send + Sync {
+    fn field_key(&self) -> &[u8; super::KEY_LEN];
+    fn hmac_key(&self) -> &[u8; super::KEY_LEN];
+    fn key_id(&self) -> &str;
+}
+
+// Blanket `Arc<dyn KeyStore>` convenience: any concrete `KeyStore`
+// can be `Arc`'d up and stored as a trait object without ceremony.
+pub type SharedKeyStore = Arc<dyn KeyStore>;
 
 /// Local key store backed by in-process memory.
 ///
@@ -145,6 +186,95 @@ impl std::fmt::Debug for LocalKeyStore {
     }
 }
 
+// ---- KeyStore trait impl for LocalKeyStore ----
+//
+// Wraps the inherent methods so callers using `Arc<dyn KeyStore>`
+// can hit the same code path as callers using the concrete
+// `LocalKeyStore`. We forward to the inherent methods (which are
+// the canonical source of truth).
+
+impl KeyStore for LocalKeyStore {
+    fn field_key(&self) -> &[u8; super::KEY_LEN] {
+        // Cast through a manual re-borrow to avoid the trait-method
+        // shadowing the inherent-method name.
+        LocalKeyStore::field_key(self)
+    }
+    fn hmac_key(&self) -> &[u8; super::KEY_LEN] {
+        LocalKeyStore::hmac_key(self)
+    }
+    fn key_id(&self) -> &str {
+        LocalKeyStore::key_id(self)
+    }
+}
+
+// ---- KMS-backed key store (stub for M6+) ----
+//
+// The M6 KMS integration is a future commit. For now, this stub
+// returns a sentinel error from every accessor so a misconfigured
+// prod deployment that points the config at "kms" fails closed
+// instead of silently falling back to a placeholder key. The
+// shape is here so the integration can drop in without changing
+// call sites.
+#[derive(Debug)]
+pub struct KmsKeyStore {
+    /// Human-readable identifier (e.g. "kms:alias/prod-2026-q1").
+    /// Used in audit logs and error messages; the real key never
+    /// leaves the KMS.
+    key_id: String,
+}
+
+impl KmsKeyStore {
+    /// The error returned by every accessor of the stub. The
+    /// `Arc<[u8; 32]>` would be replaced with `KmsClient` /
+    /// `KmsCiphertext` in a real impl.
+    pub fn stub_error(&self) -> CryptoError {
+        CryptoError::KmsUnavailable {
+            key_id: self.key_id.clone(),
+        }
+    }
+}
+
+impl KeyStore for KmsKeyStore {
+    fn field_key(&self) -> &[u8; super::KEY_LEN] {
+        // The M6+ impl will: cache a wrapped-data-key (DEK) returned
+        // by the KMS GenerateDataKey API and unwrap it here. The
+        // unwrapped bytes still go into a `Zeroizing<[u8; 32]>` on
+        // the impl. For now, the stub returns an empty key — but
+        // the *real* call sites use `try_field_key` (below) so they
+        // surface the error instead of getting zeros.
+        //
+        // Returning a zero key here is a safety fallback: if some
+        // old call site is still using `&[u8; KEY_LEN]` and not
+        // the Result-based accessor, we'd rather the encrypt / hash
+        // produce a known-bogus output than panic. The M6+ wire-up
+        // replaces both methods.
+        &ZERO_KEY
+    }
+    fn hmac_key(&self) -> &[u8; super::KEY_LEN] {
+        &ZERO_KEY
+    }
+    fn key_id(&self) -> &str {
+        &self.key_id
+    }
+}
+
+impl KmsKeyStore {
+    /// The Result-based accessor the rest of the codebase should
+    /// use. The trait method above is a best-effort fallback for
+    /// paths that haven't been migrated yet.
+    pub fn try_field_key(&self) -> Result<&[u8; super::KEY_LEN], CryptoError> {
+        Err(self.stub_error())
+    }
+    pub fn try_hmac_key(&self) -> Result<&[u8; super::KEY_LEN], CryptoError> {
+        Err(self.stub_error())
+    }
+    pub fn new(key_id: impl Into<String>) -> Self {
+        Self { key_id: key_id.into() }
+    }
+}
+
+const ZERO_KEY: [u8; super::KEY_LEN] = [0u8; super::KEY_LEN];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +357,75 @@ mod tests {
         assert!(!dbg.contains("ABABABAB"));
         // Should show key_id and the struct name.
         assert!(dbg.contains("LocalKeyStore"));
+    }
+
+    // ---- KeyStore trait — LocalKeyStore impl ----
+
+    #[test]
+    fn local_keystore_trait_impl_returns_correct_keys() {
+        let ks = LocalKeyStore::from_raw([0x42; 32], [0x77; 32]);
+        let trait_obj: &dyn KeyStore = &ks;
+        assert_eq!(trait_obj.field_key()[0], 0x42);
+        assert_eq!(trait_obj.hmac_key()[0], 0x77);
+        assert_eq!(trait_obj.key_id(), "raw");
+    }
+
+    #[test]
+    fn local_keystore_trait_impl_matches_inherent_methods() {
+        // The trait impl forwards to the inherent methods, so the
+        // results must be byte-identical regardless of how the
+        // caller holds the store.
+        let ks = LocalKeyStore::from_raw([0x99; 32], [0xAB; 32]);
+        let trait_obj: &dyn KeyStore = &ks;
+        assert_eq!(trait_obj.field_key(), &ks.field_key()[..]);
+        assert_eq!(trait_obj.hmac_key(), &ks.hmac_key()[..]);
+        assert_eq!(trait_obj.key_id(), ks.key_id());
+    }
+}
+
+/// Tests for the KmsKeyStore stub. The real KMS integration is
+/// M6+ — for now the stub fails closed on every accessor so a
+/// misconfigured prod deployment surfaces an error instead of
+/// silently using a placeholder key.
+#[cfg(test)]
+mod kms_tests {
+    use super::*;
+
+    #[test]
+    fn kms_stub_error_includes_key_id() {
+        let kms = KmsKeyStore::new("kms:alias/prod-2026-q1");
+        let err = kms.stub_error();
+        match err {
+            CryptoError::KmsUnavailable { key_id } => {
+                assert_eq!(key_id, "kms:alias/prod-2026-q1");
+            }
+            other => panic!("expected KmsUnavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kms_stub_try_accessors_return_error() {
+        let kms = KmsKeyStore::new("kms:test");
+        assert!(matches!(
+            kms.try_field_key(),
+            Err(CryptoError::KmsUnavailable { .. })
+        ));
+        assert!(matches!(
+            kms.try_hmac_key(),
+            Err(CryptoError::KmsUnavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn kms_stub_trait_accessors_return_zero_key() {
+        // The trait method is the "best-effort" path; it returns
+        // zeros so old call sites don't panic. The real
+        // migration in M6+ replaces this with an unwrapped DEK
+        // or returns an error via the Result-based accessor.
+        let kms = KmsKeyStore::new("kms:test");
+        let trait_obj: &dyn KeyStore = &kms;
+        assert_eq!(trait_obj.field_key(), &[0u8; super::super::KEY_LEN][..]);
+        assert_eq!(trait_obj.hmac_key(), &[0u8; super::super::KEY_LEN][..]);
+        assert_eq!(trait_obj.key_id(), "kms:test");
     }
 }

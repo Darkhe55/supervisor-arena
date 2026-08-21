@@ -104,9 +104,10 @@ impl AliasGenerator {
         Self { hmac_key, whitelist }
     }
 
-    /// Build from a `LocalKeyStore` — convenience for the production
-    /// startup path. M5b will use this.
-    pub fn from_keystore(keys: &crate::crypto::LocalKeyStore) -> Self {
+    /// Build from a `KeyStore` — convenience for the production
+    /// startup path. M6: takes the trait so any backend (local or
+    /// KMS) works. M5b used to take `&LocalKeyStore` directly.
+    pub fn from_keystore(keys: &dyn crate::crypto::KeyStore) -> Self {
         Self::new(*keys.hmac_key())
     }
 

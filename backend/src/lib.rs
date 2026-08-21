@@ -43,23 +43,33 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::config::AppConfig;
-use crate::crypto::LocalKeyStore;
+use crate::crypto::{LocalKeyStore, SharedKeyStore};
 
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub db: Pool,
-    pub keys: Arc<LocalKeyStore>,
+    /// M6 — the key store is held behind a `KeyStore` trait object
+    /// so a future KMS integration (AWS / Aliyun / Vault) can
+    /// drop in without changing every call site. M3 used the
+    /// concrete `LocalKeyStore`; the conversion to `Arc<dyn
+    /// KeyStore>` is the only change required at the construction
+    /// site (`lib.rs::run`).
+    pub keys: SharedKeyStore,
     pub rate_limit: rate_limit::RateLimitState,
     pub audit: audit::AuditLog,
 }
 
 pub async fn run(config: AppConfig) -> Result<()> {
-    // Initialize key store (parses hex keys, fails fast on bad config)
-    let keys = LocalKeyStore::from_config(&config.encryption)
+    // Initialize key store (parses hex keys, fails fast on bad config).
+    // M6: wrap the concrete `LocalKeyStore` in a `KeyStore` trait
+    // object so a future `KmsKeyStore` can drop in here without
+    // changing the rest of the app.
+    let local = LocalKeyStore::from_config(&config.encryption)
         .map_err(|e| anyhow::anyhow!("invalid encryption config: {e}"))?;
-    info!(key_id = %keys.key_id(), "LocalKeyStore initialized");
+    info!(key_id = %local.key_id(), "LocalKeyStore initialized");
+    let keys: SharedKeyStore = Arc::new(local);
 
     // Initialize database pool
     let db = db::build_pool(&config.database).await?;
@@ -69,7 +79,7 @@ pub async fn run(config: AppConfig) -> Result<()> {
     let state = AppState {
         config: Arc::new(config.clone()),
         db: db.clone(),
-        keys: Arc::new(keys),
+        keys, // already a SharedKeyStore (= Arc<dyn KeyStore>)
         rate_limit: rate_limit::RateLimitState::new(),
         audit: audit::AuditLog::new(db),
     };

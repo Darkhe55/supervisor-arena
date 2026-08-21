@@ -105,7 +105,7 @@ fn service(state: &AppState) -> Result<SupervisorService, ApiError> {
     use crate::discipline::DisciplineRepo;
     let repo = SupervisorRepo::new(state.db.clone());
     let keys = state.keys.clone();
-    let alias_gen = super::alias::AliasGenerator::from_keystore(&keys);
+    let alias_gen = super::alias::AliasGenerator::from_keystore(&*keys);
     let review_cfg: ReviewConfig = state.config.review.clone();
     let aggregation = AggregationService::new(AggRepo::new(state.db.clone()));
     let discipline_repo = DisciplineRepo::new(state.db.clone());

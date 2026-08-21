@@ -1,11 +1,10 @@
 //! Rating business logic
 
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::account::repo::AccountRepo;
 use crate::config::ReviewConfig;
-use crate::crypto::{aes, LocalKeyStore};
+use crate::crypto::{aes, SharedKeyStore};
 use crate::supervisor::repo::SupervisorRepo;
 
 use super::dto::{
@@ -26,7 +25,7 @@ pub struct RatingService {
     #[allow(dead_code)]
     supervisor_repo: SupervisorRepo,
     account_repo: AccountRepo,
-    keys: Arc<LocalKeyStore>,
+    keys: SharedKeyStore,
     review_cfg: ReviewConfig,
 }
 
@@ -35,7 +34,7 @@ impl RatingService {
         rating_repo: RatingRepo,
         supervisor_repo: SupervisorRepo,
         account_repo: AccountRepo,
-        keys: Arc<LocalKeyStore>,
+        keys: SharedKeyStore,
         review_cfg: ReviewConfig,
     ) -> Self {
         Self {

@@ -5,11 +5,10 @@
 //! are thin — they translate HTTP <-> service calls and map errors to status
 //! codes.
 
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::config::AuthConfig;
-use crate::crypto::{aes, argon2, hmac, LocalKeyStore};
+use crate::crypto::{aes, argon2, hmac, SharedKeyStore};
 
 use super::dto::{AuthResponse, LoginRequest, RegisterRequest};
 use super::error::AccountError;
@@ -44,12 +43,12 @@ pub struct StoredAccount {
 #[derive(Clone)]
 pub struct AccountService {
     repo: AccountRepo,
-    keys: Arc<LocalKeyStore>,
+    keys: SharedKeyStore,
     jwt: JwtService,
 }
 
 impl AccountService {
-    pub fn new(repo: AccountRepo, keys: Arc<LocalKeyStore>, auth: &AuthConfig) -> Result<Self, anyhow::Error> {
+    pub fn new(repo: AccountRepo, keys: SharedKeyStore, auth: &AuthConfig) -> Result<Self, anyhow::Error> {
         let jwt = JwtService::from_config(auth)?;
         Ok(Self { repo, keys, jwt })
     }

@@ -23,7 +23,7 @@ pub mod hmac;
 pub mod keystore;
 
 pub use error::CryptoError;
-pub use keystore::LocalKeyStore;
+pub use keystore::{KeyStore, KmsKeyStore, LocalKeyStore, SharedKeyStore};
 
 /// Length of a 256-bit (AES-256) key, in bytes.
 pub const KEY_LEN: usize = 32;
