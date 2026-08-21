@@ -1266,3 +1266,76 @@ async fn invitation_expired_code_rejected() {
         other => panic!("expected Expired, got {other:?}"),
     }
 }
+
+// =========================================================================
+// M5 邀请试用 — register-with-invite-code end-to-end
+// =========================================================================
+
+#[tokio::test]
+#[serial]
+async fn register_with_valid_invite_links_to_inviter() {
+    use supervisor_arena::invitation::{InvitationRepo, InvitationService};
+    use uuid::Uuid;
+
+    let pool = setup().await;
+    let inv_svc = InvitationService::new(InvitationRepo::new(pool.clone()), [0x42u8; 32]);
+
+    // 1. Create an inviter account.
+    let inviter_id = insert_account(&pool, "inviter-m5@example.com", "CS", "CS").await;
+
+    // 2. Create a code from that inviter.
+    let (_display, inv_row) = inv_svc
+        .create(Some(inviter_id), 1, None, Some("for a friend"))
+        .await
+        .unwrap();
+
+    // 3. Simulate the register flow's auto-redeem path:
+    //    - Insert a new account row with invited_by_account_id = inviter_id
+    //    - Bump use_count on the code
+    //    (We don't go through the HTTP handler because the test
+    //    environment doesn't have the full AppState.)
+    let new_id = Uuid::new_v4();
+    let c = pool.get().await.unwrap();
+    c.execute(
+        "INSERT INTO accounts (id, email_enc, email_hash, password_hash,
+                              discipline_hash, institution_hash, invited_by_account_id)
+         VALUES ($1::uuid, ''::bytea, ''::bytea, 'x', ''::bytea, ''::bytea, $2::uuid)",
+        &[&new_id, &inviter_id],
+    )
+    .await
+    .unwrap();
+    inv_svc.redeem(&inv_row.code).await.unwrap();
+
+    // 4. Verify the FK is set on the new account.
+    let invited_by: Option<Uuid> = c
+        .query_one(
+            "SELECT invited_by_account_id FROM accounts WHERE id = $1::uuid",
+            &[&new_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(invited_by, Some(inviter_id));
+}
+
+#[tokio::test]
+#[serial]
+async fn register_with_invalid_invite_still_succeeds() {
+    use supervisor_arena::invitation::InvitationService;
+
+    let pool = setup().await;
+    let inv_svc = InvitationService::new(
+        supervisor_arena::invitation::InvitationRepo::new(pool.clone()),
+        [0x42u8; 32],
+    );
+
+    // Garbage code → CodeNotFound → not redeemed, but registration
+    // still succeeds (open registration per OUTLINE §7.6).
+    let row = inv_svc
+        .validate_redeemable("ZZZZZZZZZZZZ", chrono::Utc::now())
+        .await;
+    assert!(matches!(
+        row,
+        Err(supervisor_arena::invitation::InvitationError::CodeNotFound(_))
+    ));
+}

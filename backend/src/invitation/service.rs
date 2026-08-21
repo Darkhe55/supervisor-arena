@@ -154,6 +154,13 @@ impl InvitationService {
     ) -> Result<Vec<InvitationRow>, InvitationError> {
         self.repo.list_by_creator(account_id).await
     }
+
+    /// Expose the underlying repo for callers that need to call
+    /// repo methods directly (e.g. the account service doing
+    /// `inv.repo_ref().redeem(row.id)` after its own validation).
+    pub fn repo_ref(&self) -> &InvitationRepo {
+        &self.repo
+    }
 }
 
 fn is_collision(e: &InvitationError) -> bool {

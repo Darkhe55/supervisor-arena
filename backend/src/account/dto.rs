@@ -20,6 +20,14 @@ pub struct RegisterRequest {
     /// Optional grade label, e.g. "2024-MS" — stored AES-256-GCM encrypted.
     #[serde(default)]
     pub grade: Option<String>,
+    /// M5 邀请试用: optional invitation code. If provided and
+    /// valid, the new account is linked to the inviter via
+    /// `accounts.invited_by_account_id`. If the code is
+    /// invalid/expired/used, registration still succeeds
+    /// (open registration per OUTLINE §7.6) — the user just
+    /// isn't tagged as "invited".
+    #[serde(default)]
+    pub invite_code: Option<String>,
 }
 
 /// POST /auth/login
@@ -37,6 +45,11 @@ pub struct AuthResponse {
     /// Access token lifetime in seconds (mirrors the JWT `exp` claim).
     pub expires_in: i64,
     pub tier: String,
+    /// M5: the inviter if registration used a valid invite code,
+    /// or None for open registration. Lets the frontend show a
+    /// "thanks for joining early" UX.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invited_by: Option<Uuid>,
 }
 
 /// Response from /auth/me — minimal public-safe view.

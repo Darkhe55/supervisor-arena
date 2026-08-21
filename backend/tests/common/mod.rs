@@ -104,7 +104,8 @@ pub async fn truncate_all(pool: &Pool) {
         .await
         .expect("truncate_all: pool get");
     c.batch_execute(
-        "DELETE FROM discipline_weight_voters;
+        "DELETE FROM account_invitations;
+         DELETE FROM discipline_weight_voters;
          DELETE FROM discipline_weight_votes;
          DELETE FROM ratings;
          DELETE FROM supervisor_name_mappings;

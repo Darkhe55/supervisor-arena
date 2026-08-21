@@ -56,7 +56,17 @@ async fn register(
     Json(req): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<AuthResponse>), ApiError> {
     let service = account_service(&state)?;
-    let resp = service.register(req).await?;
+    // M5 邀请试用: build the InvitationService so the register
+    // flow can redeem an optional invite code in the same flow.
+    let invitation = if req.invite_code.is_some() {
+        Some(crate::invitation::InvitationService::new(
+            crate::invitation::InvitationRepo::new(state.db.clone()),
+            *state.keys.hmac_key(),
+        ))
+    } else {
+        None
+    };
+    let resp = service.register(req, invitation.as_ref()).await?;
     // M6 §7.9.5 — log the encrypted-field access. We log AFTER
     // the insert succeeds so failed registers don't leave a phantom
     // audit row. Best-effort: the writer never propagates errors.

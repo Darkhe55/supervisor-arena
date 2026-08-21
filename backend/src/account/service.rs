@@ -60,8 +60,13 @@ impl AccountService {
     /// 2. Encrypt email (AES), hash email/discipline/institution (HMAC).
     /// 3. Hash password (Argon2id).
     /// 4. Insert. Email-unique constraint maps to `EmailTaken`.
-    /// 5. Issue access token.
-    pub async fn register(&self, req: RegisterRequest) -> Result<AuthResponse, AccountError> {
+    /// 5. (Optional) redeem invite_code and link `invited_by_account_id`.
+    /// 6. Issue access token.
+    pub async fn register(
+        &self,
+        req: RegisterRequest,
+        invitation: Option<&crate::invitation::InvitationService>,
+    ) -> Result<AuthResponse, AccountError> {
         // 1. Validate.
         validate_email(&req.email)?;
         validate_password(&req.password)?;
@@ -98,14 +103,94 @@ impl AccountService {
         };
         let id = self.repo.insert(&new_acct).await?;
 
-        // 5. Issue token.
+        // 5. (Optional) redeem an invite code and link the inviter.
+        //    Best-effort: a bad code doesn't fail registration
+        //    (open registration per OUTLINE §7.6). We log a warn
+        //    if anything goes wrong, but the user is created either way.
+        let mut invited_by: Option<uuid::Uuid> = None;
+        if let Some(code) = &req.invite_code {
+            if let Some(inv_svc) = invitation {
+                match self.try_redeem_and_link(inv_svc, id, code).await {
+                    Ok(Some(inviter)) => {
+                        tracing::info!(
+                            account_id = %id,
+                            inviter_id = %inviter,
+                            "registered with valid invite code"
+                        );
+                        invited_by = Some(inviter);
+                    }
+                    Ok(None) => {
+                        tracing::info!(
+                            account_id = %id,
+                            "registered with invalid / used invite code (open registration)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            account_id = %id,
+                            error = %e,
+                            "invite-code redemption failed (registration still succeeded)"
+                        );
+                    }
+                }
+            }
+        }
+
+        // 6. Issue token.
         let (token, expires_in) = self.jwt.issue(id, "basic")?;
         Ok(AuthResponse {
             account_id: id,
             access_token: token,
             expires_in,
             tier: "basic".into(),
+            invited_by,
         })
+    }
+
+    /// Try to redeem `code` and link `new_account_id` to the
+    /// inviter. Returns Ok(Some(inviter_id)) on success, Ok(None)
+    /// if the code is invalid / used / expired, Err on DB issues.
+    async fn try_redeem_and_link(
+        &self,
+        inv: &crate::invitation::InvitationService,
+        new_account_id: uuid::Uuid,
+        code: &str,
+    ) -> Result<Option<uuid::Uuid>, AccountError> {
+        // Validate first so we don't bump use_count on a
+        // fully-used / expired / revoked code.
+        let row = match inv.validate_redeemable(code, chrono::Utc::now()).await {
+            Ok(r) => r,
+            Err(crate::invitation::InvitationError::CodeNotFound(_))
+            | Err(crate::invitation::InvitationError::Expired(_))
+            | Err(crate::invitation::InvitationError::Revoked(_))
+            | Err(crate::invitation::InvitationError::FullyUsed) => {
+                return Ok(None);
+            }
+            Err(e) => {
+                return Err(AccountError::Database(anyhow::anyhow!(
+                    "invite lookup: {e}"
+                )));
+            }
+        };
+        // Atomic redemption. The repo re-checks the WHERE clause
+        // in case of a race.
+        inv.repo_ref()
+            .redeem(row.id)
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("invite redeem: {e}")))?;
+        // Link the new account to the inviter. UPDATE uses
+        // invited_by_account_id = row.created_by so we know who
+        // made the code.
+        if let Some(inviter) = row.created_by {
+            self.repo
+                .set_invited_by(new_account_id, inviter)
+                .await?;
+            Ok(Some(inviter))
+        } else {
+            // System-generated code (no inviter). We still
+            // redeemed the use_count; just don't set a FK.
+            Ok(None)
+        }
     }
 
     /// Login: email + password -> access token.
@@ -146,6 +231,9 @@ impl AccountService {
             access_token: token,
             expires_in,
             tier: acct.tier,
+            // Login doesn't redeem a new code; the inviter is
+            // already stored on the account row from registration.
+            invited_by: None,
         })
     }
 

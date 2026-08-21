@@ -196,6 +196,28 @@ impl AccountRepo {
         Ok(())
     }
 
+    /// M5 邀请试用 — link a freshly-registered account to the
+    /// inviter (the creator of the redeemed invitation code).
+    pub async fn set_invited_by(
+        &self,
+        account_id: Uuid,
+        inviter_id: Uuid,
+    ) -> Result<(), AccountError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("pool: {e}")))?;
+        client
+            .execute(
+                "UPDATE accounts SET invited_by_account_id = $2::uuid WHERE id = $1::uuid",
+                &[&account_id, &inviter_id],
+            )
+            .await
+            .map_err(|e| AccountError::Database(anyhow::anyhow!("set_invited_by: {e}")))?;
+        Ok(())
+    }
+
     /// Set the `is_banned` flag on an account. Banned accounts are
     /// excluded from aggregation AND cannot log in (H-48).
     pub async fn set_banned(
