@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>登录 · supervisor-arena</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  {% include "_nav.html" %}
+  <div class="sa-container">
+    <h1>登录</h1>
+    {% if !flash.is_empty() %}
+      <div class="sa-flash">{{ flash }}</div>
+    {% endif %}
+
+    {% if !form_error.is_empty() %}
+      <div class="sa-flash error">{{ form_error }}</div>
+    {% endif %}
+
+    <form action="/login" method="post" class="sa-card">
+      <label for="email">邮箱</label>
+      <input type="email" id="email" name="email" value="{{ form.email }}" required>
+
+      <label for="password">密码</label>
+      <input type="password" id="password" name="password" required>
+
+      <div style="margin-top: 1.5rem;">
+        <button type="submit" class="sa-button">登录</button>
+        <a href="/register" class="sa-button secondary">还没有账号？</a>
+      </div>
+    </form>
+    <p class="sa-muted">登录失败会返回通用错误（防 enumeration）。每 IP 每分钟最多 5 次（防爆破）。</p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>给 {{ supervisor.alias }} 评分 · supervisor-arena</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  {% include "_nav.html" %}
+  <div class="sa-container">
+    <h1>给 {{ supervisor.alias }} 评分</h1>
+    <p class="sa-muted">{{ supervisor.discipline }} · {{ supervisor.college }}</p>
+
+    {% if !form_error.is_empty() %}
+      <div class="sa-flash error">{{ form_error }}</div>
+    {% endif %}
+
+    <p class="sa-muted">
+      评分范围：-100 ~ 100。每次评分只针对一个维度。同一 (你, 导师, 维度) 已有的评分会被
+      "supersede"（保留历史但只显示最新）。
+    </p>
+
+    <form action="/supervisors/{{ supervisor.alias }}/rate" method="post" class="sa-card">
+      <label for="dim">评分维度</label>
+      <select id="dim" name="dim" required>
+        <option value="">— 选择 —</option>
+        <option value="research">科研</option>
+        <option value="resource">资源调度</option>
+        <option value="fit">学科适配</option>
+        <option value="currency">领域跟进</option>
+        <option value="ethic">行为正当性</option>
+        <option value="tool">新兴工具支持</option>
+      </select>
+
+      <label for="value">分值（-100 ~ 100）</label>
+      <input type="number" id="value" name="value" min="-100" max="100" value="0" required>
+
+      <label for="dim_additional">该维度的附加信息 <span class="sa-muted">（选填 ≤ 500 字）</span></label>
+      <textarea id="dim_additional" name="dim_additional" maxlength="500"></textarea>
+
+      <label for="overall_additional">总附加信息 <span class="sa-muted">（选填 ≤ 1000 字）</span></label>
+      <textarea id="overall_additional" name="overall_additional" maxlength="1000"></textarea>
+
+      <label for="additional_level">附加信息密度</label>
+      <select id="additional_level" name="additional_level">
+        <option value="">— 不指定 —</option>
+        <option value="low">低（一般性评价）</option>
+        <option value="medium">中（含具体场景）</option>
+        <option value="high">高（细节丰富 / 数据支撑）</option>
+      </select>
+
+      <div style="margin-top: 1.5rem;">
+        <button type="submit" class="sa-button">提交评分</button>
+        <a href="/supervisors/{{ supervisor.alias }}" class="sa-button secondary">取消</a>
+      </div>
+    </form>
+
+    <p class="sa-muted">
+      ⚠ P1 敏感信息（手机号、邮箱、微信号、QQ、外链）会被自动脱敏。
+      公开综合分永远 clamp 到 ≥ 0（保护评分者免受 dog-piling）。
+    </p>
+  </div>
+</body>
+</html>

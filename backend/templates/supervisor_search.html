@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>搜索导师 · supervisor-arena</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  {% include "_nav.html" %}
+  <div class="sa-container">
+    <h1>搜索导师</h1>
+    <p class="sa-muted">导师按 (学科, 学院) 分桶展示。k-匿名 ≥ 10 才会公开显示 — 否则不返回。</p>
+
+    {% if !form_error.is_empty() %}
+      <div class="sa-flash error">{{ form_error }}</div>
+    {% endif %}
+
+    <form action="/supervisors" method="post" class="sa-card">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+          <label for="discipline">学科</label>
+          <select id="discipline" name="discipline" required>
+            <option value="">— 选择 —</option>
+            {% for d in disciplines %}
+              <option value="{{ d.code }}" {% if d.code == query.discipline %}selected{% endif %}>
+                {{ d.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="college">学院</label>
+          <select id="college" name="college" required>
+            <option value="">— 选择 —</option>
+            {% for c in colleges %}
+              <option value="{{ c.code }}" {% if c.code == query.college %}selected{% endif %}>
+                {{ c.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div style="margin-top: 1rem;">
+        <button type="submit" class="sa-button">搜索</button>
+      </div>
+    </form>
+
+    {% if has_results %}
+      <h2>{{ results.discipline_label }} · {{ results.college_label }}（共 {{ results.total }} 条）</h2>
+      {% if results.results.is_empty() %}
+        <div class="sa-card sa-muted">此分桶下没有可见导师（k-匿名未达标或尚未提交）。</div>
+      {% else %}
+        <div class="sa-grid">
+          {% for s in results.results %}
+            <div class="sa-card">
+              <h3><a href="/supervisors/{{ s.alias }}">{{ s.alias }}</a></h3>
+              <p class="sa-muted">{{ s.discipline }} · {{ s.college }}</p>
+              <p>
+                综合分：
+                {% if s.composite_score.is_some() %}
+                  <strong>{{ s.composite_score.as_ref().unwrap() }}</strong> / 100
+                {% else %}
+                  <span class="sa-muted">尚无评分</span>
+                {% endif %}
+              </p>
+              <p class="sa-muted">评分数：{{ s.rating_count }}</p>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endif %}
+  </div>
+</body>
+</html>

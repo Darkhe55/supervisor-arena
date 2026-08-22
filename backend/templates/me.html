@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>我的账户 · supervisor-arena</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  {% include "_nav.html" %}
+  <div class="sa-container">
+    <h1>我的账户</h1>
+    {% if !flash.is_empty() %}
+      <div class="sa-flash ok">{{ flash }}</div>
+    {% endif %}
+
+    <div class="sa-card">
+      <table>
+        <tr><th>账户 ID</th><td><code>{{ user_id }}</code></td></tr>
+        <tr><th>会员等级</th><td>{{ user_tier }}</td></tr>
+        <tr><th>认证状态</th><td>✅ 已登录（JWT in HttpOnly cookie）</td></tr>
+      </table>
+    </div>
+
+    <div class="sa-card">
+      <h2>快捷入口</h2>
+      <p>
+        <a href="/supervisors" class="sa-button">搜索导师</a>
+        <a href="/supervisors/new" class="sa-button secondary">+ 提交新导师</a>
+      </p>
+    </div>
+
+    <div class="sa-card">
+      <h2>说明</h2>
+      <p class="sa-muted">
+        这里只显示最简的账户信息（账户 ID、tier、登录状态）。邮箱 / 学科 / 机构 / 年级 都是 PII，
+        不会通过此页或 <code>/auth/me</code> 返回。<br>
+        如需查看自己的评分历史，可调用 <code>GET /auth/me/ratings</code>（未来 M5+）。
+      </p>
+    </div>
+  </div>
+</body>
+</html>

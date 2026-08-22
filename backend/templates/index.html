@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>supervisor-arena</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  {% include "_nav.html" %}
+  <div class="sa-container">
+    {% if !flash.is_empty() %}
+      <div class="sa-flash">{{ flash }}</div>
+    {% endif %}
+    <h1>给导师打分的"众包 + 动态加权"排名系统</h1>
+
+    <div class="sa-card">
+      <h2>核心理念</h2>
+      <p>没有绝对好坏，所有评分都是相对的、综合的。</p>
+      <ul>
+        <li><strong>多维度评分</strong>：科研 / 资源 / 学科适配 / 跟进 / 行为 / 工具（6 维）</li>
+        <li><strong>学科自适应权重</strong>：不同学科维度权重不同，用户共同投票决定</li>
+        <li><strong>匿名化名 + k-匿名 ≥ 10</strong>：化名人名白名单校验，跨学科+学院严格 1-to-1</li>
+        <li><strong>字段级加密</strong>：P0/P1/P2/P3 四级，AES-256-GCM + HMAC-SHA256 + Argon2id</li>
+      </ul>
+    </div>
+
+    {% if !is_logged_in %}
+      <div class="sa-card">
+        <h2>开始使用</h2>
+        <p>
+          <a href="/register" class="sa-button">注册账号</a>
+          <a href="/login" class="sa-button secondary">登录</a>
+        </p>
+        <p class="sa-muted">注册仅需邮箱、密码、学科和机构。所有 PII 字段都会加密存储。</p>
+      </div>
+    {% else %}
+      <div class="sa-card">
+        <h2>下一步</h2>
+        <p>
+          <a href="/supervisors" class="sa-button">搜索导师</a>
+          <a href="/supervisors/new" class="sa-button secondary">+ 提交新导师</a>
+          <a href="/me" class="sa-button secondary">我的账户</a>
+        </p>
+      </div>
+    {% endif %}
+  </div>
+  <div class="sa-footer">
+    supervisor-arena · M0/M1/M2/M3/M5/M6(部分) · 详见 <a href="/health">/health</a>
+  </div>
+</body>
+</html>

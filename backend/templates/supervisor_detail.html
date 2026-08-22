@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ supervisor.alias }} · supervisor-arena</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  {% include "_nav.html" %}
+  <div class="sa-container">
+    {% if not_found %}
+      <h1>未找到</h1>
+      <div class="sa-flash error">该化名对应的导师条目不存在或已被删除。</div>
+      <a href="/supervisors" class="sa-button">返回搜索</a>
+    {% else %}
+      <h1>{{ supervisor.alias }}</h1>
+      <p class="sa-muted">{{ supervisor.discipline }} · {{ supervisor.college }}</p>
+
+      {% if !flash.is_empty() %}
+        <div class="sa-flash ok">{{ flash }}</div>
+      {% endif %}
+
+      {% if k_gated %}
+        <div class="sa-k-gate">
+          <strong>k-匿名未达标</strong> — 该导师所在 (学科, 学院) 分桶下评分人数 &lt; 10。<br>
+          详细评分暂不公开，以保护评分者身份。等达到阈值后自动公开。
+        </div>
+      {% endif %}
+
+      <div class="sa-card">
+        <h2>综合分</h2>
+        <p style="font-size: 2rem; margin: 0.5rem 0;">
+          {% if supervisor.composite_score.is_some() %}
+            <strong>{{ supervisor.composite_score.as_ref().unwrap() }}</strong>
+            <span class="sa-muted" style="font-size: 1rem;">/ 100</span>
+          {% else %}
+            <span class="sa-muted">尚无评分</span>
+          {% endif %}
+        </p>
+        <p class="sa-muted">基于 {{ supervisor.rating_count }} 条已通过审核的评分（k-anon count: {{ supervisor.k_anonymity_count }}）</p>
+      </div>
+
+      <div class="sa-card">
+        <h2>6 维评分雷达</h2>
+        <div class="sa-radar">
+          <div class="sa-radar-cell"><span>科研</span><span class="val">
+            {% if supervisor.radar_research.is_some() %}{{ supervisor.radar_research.as_ref().unwrap() }}{% else %}<span class="sa-muted">—</span>{% endif %}
+          </span></div>
+          <div class="sa-radar-cell"><span>资源</span><span class="val">
+            {% if supervisor.radar_resource.is_some() %}{{ supervisor.radar_resource.as_ref().unwrap() }}{% else %}<span class="sa-muted">—</span>{% endif %}
+          </span></div>
+          <div class="sa-radar-cell"><span>适配</span><span class="val">
+            {% if supervisor.radar_fit.is_some() %}{{ supervisor.radar_fit.as_ref().unwrap() }}{% else %}<span class="sa-muted">—</span>{% endif %}
+          </span></div>
+          <div class="sa-radar-cell"><span>跟进</span><span class="val">
+            {% if supervisor.radar_currency.is_some() %}{{ supervisor.radar_currency.as_ref().unwrap() }}{% else %}<span class="sa-muted">—</span>{% endif %}
+          </span></div>
+          <div class="sa-radar-cell"><span>行为</span><span class="val">
+            {% if supervisor.radar_ethic.is_some() %}{{ supervisor.radar_ethic.as_ref().unwrap() }}{% else %}<span class="sa-muted">—</span>{% endif %}
+          </span></div>
+          <div class="sa-radar-cell"><span>工具</span><span class="val">
+            {% if supervisor.radar_tool.is_some() %}{{ supervisor.radar_tool.as_ref().unwrap() }}{% else %}<span class="sa-muted">—</span>{% endif %}
+          </span></div>
+        </div>
+        <p class="sa-muted" style="margin-top: 0.75rem;">
+          每维范围 [-100, 100]；公开显示 clamp 到 ≥ 0（OUTLINE §8）。
+        </p>
+      </div>
+
+      <div class="sa-card">
+        <h2>操作</h2>
+        {% if is_logged_in %}
+          <a href="/supervisors/{{ supervisor.alias }}/rate" class="sa-button">给这位导师评分</a>
+        {% else %}
+          <a href="/login?flash=login_required" class="sa-button">登录后评分</a>
+        {% endif %}
+        <a href="/supervisors" class="sa-button secondary">返回搜索</a>
+      </div>
+    {% endif %}
+  </div>
+</body>
+</html>

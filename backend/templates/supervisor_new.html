@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>提交新导师 · supervisor-arena</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  {% include "_nav.html" %}
+  <div class="sa-container">
+    <h1>提交新导师</h1>
+    <p class="sa-muted">
+      提交的姓名会经 AES-256-GCM 加密后存到后端映射表，对外只显示一个由白名单 + 学科 + 学院决定的匿名化名。
+      相同 (姓名, 学科, 学院) 永远映射到同一个化名（1-to-1）。
+    </p>
+
+    {% if !form_error.is_empty() %}
+      <div class="sa-flash error">{{ form_error }}</div>
+    {% endif %}
+
+    <form action="/supervisors/new" method="post" class="sa-card">
+      <label for="submitted_name">导师姓名 / 称呼</label>
+      <input type="text" id="submitted_name" name="submitted_name" value="{{ form.submitted_name }}" required>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+          <label for="discipline">学科</label>
+          <select id="discipline" name="discipline" required>
+            <option value="">— 选择 —</option>
+            {% for d in disciplines %}
+              <option value="{{ d.code }}" {% if d.code == form.discipline %}selected{% endif %}>
+                {{ d.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="college">学院</label>
+          <select id="college" name="college" required>
+            <option value="">— 选择 —</option>
+            {% for c in colleges %}
+              <option value="{{ c.code }}" {% if c.code == form.college %}selected{% endif %}>
+                {{ c.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-top: 1.5rem;">
+        <button type="submit" class="sa-button">提交</button>
+        <a href="/supervisors" class="sa-button secondary">取消</a>
+      </div>
+    </form>
+  </div>
+</body>
+</html>

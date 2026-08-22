@@ -1,0 +1,16 @@
+<nav class="sa-nav">
+  <a href="/" class="sa-brand">supervisor-arena</a>
+  <div class="sa-nav-links">
+    <a href="/supervisors">导师</a>
+    {% if is_logged_in %}
+      <a href="/supervisors/new">+ 提交新导师</a>
+      <a href="/me">{{ user_tier }} 账户</a>
+      <form action="/logout" method="post" style="display:inline">
+        <button type="submit" class="sa-link-button">登出</button>
+      </form>
+    {% else %}
+      <a href="/login">登录</a>
+      <a href="/register">注册</a>
+    {% endif %}
+  </div>
+</nav>

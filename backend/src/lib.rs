@@ -35,6 +35,7 @@ pub mod rating;
 pub mod rate_limit;
 pub mod report;
 pub mod supervisor;
+pub mod web;
 
 use anyhow::Result;
 use axum::{extract::State, routing::get, Json, Router};
@@ -122,6 +123,8 @@ fn build_router(state: AppState) -> Router {
         .nest("/invitations", invitation::handler::invitation_router())
         .nest("/lookup", lookup::handler::lookup_router())
         .nest("/reports", report::handler::report_router())
+        // H-54 user UI (M4 first cut — server-rendered).
+        .merge(web::router::web_router())
         .with_state(state)
 }
 
