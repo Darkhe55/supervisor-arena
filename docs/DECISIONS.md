@@ -762,6 +762,17 @@
 - **防御**:`git check-ignore -v <path>` 验证 pattern 真的命中后才算"被忽略"
 - **关联**:无
 
+### H-53 🆕 ☑ config.rs::set_default 敏感字段 = 移除 fallback,启动 fail-closed
+- **场景**(2026-08-22 敏感信息审计发现):`config.rs:132` `set_default("database.url", "postgres://supervisor:supervisor_dev_pwd@localhost:5432/supervisor_arena")` + line 136 `redis.url`。`set_default` 是 *fallback*,部署忘设 env → app 静默连 dev 凭据 + dev 端口,生产镜像忘改 env 不会报错
+- **倾向**:**移除** `set_default` 对 `database.url` / `redis.url` / `auth.jwt_secret` / `encryption.field_key` / `encryption.hmac_salt_key` 的 fallback。启动时强制要求 env 提供,缺失则 panic
+- **理由**:
+  - 攻击面:拿到 GitHub 源码 → 知道 dev DB 密码 → 扫 `localhost:5432` / prod 容器误连 dev
+  - 当前缓解(README 文字提醒 / `deadbeef` 启动警告)只针对 JWT+encryption,**不覆盖 DB URL**
+  - 跟 H-59 `KmsKeyStore` stub 的 **fail-closed** 哲学一致——misconfigured prod 应 panic 不是 silent default
+- **dev 体验兜底**:`backend/.env.example` 写完整示例 + `make dev` / `scripts/dev.sh` 自动 cp。开发者一行命令起来,不破体验
+- **关联**:H-59(KmsKeyStore fail-closed),H-13(env 命名),H-12(port 5433)
+- **状态**:**已识别,未修**(本轮只更新 README 把 H-53 写进 Security Notes 警示,代码修法待下一 PR)
+
 ---
 
 ### H-43 🆕 ☑ 权重变更 = 单 dim 提议 + 5 维均匀重平衡
