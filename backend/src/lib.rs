@@ -38,7 +38,7 @@ pub mod supervisor;
 pub mod web;
 
 use anyhow::Result;
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{extract::State, http::StatusCode, response::{IntoResponse, Response}, routing::get, Json, Router};
 use deadpool_postgres::Pool;
 use serde::Serialize;
 use std::sync::Arc;
@@ -46,6 +46,7 @@ use tracing::info;
 
 use crate::config::AppConfig;
 use crate::crypto::{LocalKeyStore, SharedKeyStore};
+use crate::web::{rating_pages, supervisor_pages};
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -108,24 +109,50 @@ pub async fn run(config: AppConfig) -> Result<()> {
 }
 
 fn build_router(state: AppState) -> Router {
+    // The web's /supervisors/{alias} route (bare alias) loses to the JSON
+    // /supervisors/by-alias/{alias} route when both live in the same
+    // .nest("/supervisors", ...) call — matchit can't pick a fallback
+    // across the merged router boundary. So we build the /supervisors
+    // nest as a single merged tree first, then nest it. To avoid the
+    // "/ conflicts with /{alias}" issue we use full /supervisors/...
+    // paths in the web router (instead of relative ones).
+    // Test: ONLY web, no other routes
     Router::new()
         .route("/health", get(health))
         .route("/health/db", get(health_db))
         .route("/health/crypto", get(health_crypto))
         .route("/version", get(version))
         .nest("/auth", account::handler::auth_router())
-        .nest(
-            "/supervisors",
-            supervisor::handler::supervisor_router()
-                .merge(rating::handler::rating_router()),
-        )
+        .nest("/supervisors", supervisor::handler::supervisor_router())
         .nest("/disciplines", discipline::handler::discipline_router())
         .nest("/invitations", invitation::handler::invitation_router())
         .nest("/lookup", lookup::handler::lookup_router())
         .nest("/reports", report::handler::report_router())
-        // H-54 user UI (M4 first cut — server-rendered).
-        .merge(web::router::web_router())
+        // H-54 web UI routes — registered at top level (not under the
+        // /supervisors nest) so the bare {alias} capture doesn't fight
+        // with the JSON's /:alias/ratings under the same prefix.
+        .route(
+            "/supervisors",
+            get(supervisor_pages::search_form).post(supervisor_pages::search_submit),
+        )
+        .route(
+            "/supervisors/new",
+            get(supervisor_pages::new_form).post(supervisor_pages::new_submit),
+        )
+        .route("/supervisors/{alias}", get(supervisor_pages::detail))
+        .route(
+            "/supervisors/{alias}/rate",
+            get(rating_pages::rate_form).post(rating_pages::rate_submit),
+        )
+        // H-54 web UI routes that don't live under /supervisors.
+        .merge(web::router::root_router())
+        .fallback(not_found_handler)
         .with_state(state)
+}
+
+async fn not_found_handler() -> Response {
+    tracing::warn!("404 — no route matched");
+    (StatusCode::NOT_FOUND, "404 — not found").into_response()
 }
 
 #[derive(Serialize)]

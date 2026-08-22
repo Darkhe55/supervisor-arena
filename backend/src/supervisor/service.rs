@@ -158,10 +158,34 @@ impl SupervisorService {
         // time. Drop the encrypt call here.
         drop(name_enc);
 
+        // M4 UI (H-54): in dev with REVIEW__MODE=auto_pass, the new request
+        // is auto-approved so the web UI's "create supervisor → land on
+        // detail page" flow works end-to-end without a manual review step.
+        // Production deployments switch REVIEW__MODE=manual to gate this.
+        let mut status = SupervisorRequestStatus::PendingReview;
+        if self.review_cfg.mode == crate::config::ReviewMode::AutoPass {
+            // Re-encrypt the name now (we dropped it above) so the approve
+            // call can write the mapping row without re-running the
+            // heavy hash triple logic.
+            let name_enc = aes::encrypt_str(
+                field_key,
+                &submitted_name,
+                Some(b"supervisor_name_mappings.submitted_name_enc"),
+            )?;
+            // approve() inserts the supervisor + mapping rows and marks
+            // the request resolved. We use the submitter as the reviewer
+            // since this is a system auto-approval (audit log still picks
+            // up the caller_id from the handler, not here).
+            self.approve(request_id, submitter_id, Some("auto-pass"))
+                .await?;
+            status = SupervisorRequestStatus::Approved;
+            drop(name_enc); // owned by approve path
+        }
+
         Ok(CreateSupervisorResponse {
             request_id,
             alias,
-            status: SupervisorRequestStatus::PendingReview,
+            status,
             discipline: req.discipline,
             college: req.college,
         })

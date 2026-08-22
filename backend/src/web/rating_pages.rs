@@ -63,7 +63,7 @@ pub async fn rate_submit(
     let supervisor = match lookup_supervisor(&state, &alias).await {
         Ok(s) => s,
         Err(e) => {
-            return render_form_error(current_user, e.to_string(), empty_supervisor(alias));
+            return render_form_error(current_user, e.to_string(), empty_supervisor(alias.clone()));
         }
     };
     let svc = match build_rating_service(&state) {

@@ -227,6 +227,8 @@ pub async fn detail(
     MaybeAuth(current_user): MaybeAuth,
     Path(alias): Path<String>,
 ) -> Response {
+    eprintln!("!!! detail handler called with alias={:?}", alias);
+    tracing::debug!(alias = %alias, "GET /supervisors/{alias}");
     let svc = match build_supervisor_service(&state) {
         Ok(s) => s,
         Err(e) => {
