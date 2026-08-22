@@ -1163,7 +1163,6 @@ fn audit_writer_smoke() {
 #[serial]
 async fn invitation_create_lookup_redeem_flow() {
     use supervisor_arena::invitation::InvitationService;
-    use uuid::Uuid;
 
     let pool = setup().await;
     // The InvitationService needs an HMAC key. Use a fixed one
