@@ -764,14 +764,23 @@
 
 ### H-53 🆕 ☑ config.rs::set_default 敏感字段 = 移除 fallback,启动 fail-closed
 - **场景**(2026-08-22 敏感信息审计发现):`config.rs:132` `set_default("database.url", "postgres://supervisor:supervisor_dev_pwd@localhost:5432/supervisor_arena")` + line 136 `redis.url`。`set_default` 是 *fallback*,部署忘设 env → app 静默连 dev 凭据 + dev 端口,生产镜像忘改 env 不会报错
-- **倾向**:**移除** `set_default` 对 `database.url` / `redis.url` / `auth.jwt_secret` / `encryption.field_key` / `encryption.hmac_salt_key` 的 fallback。启动时强制要求 env 提供,缺失则 panic
+- **修法**:
+  - `config.rs::from_env()` 移除 5 个 `set_default` 敏感字段(`database.url` / `redis.url` / `auth.jwt_secret` / `encryption.field_key` / `encryption.hmac_salt_key`)
+  - 新增 `AppConfig::validate()`: 启动时强校验
+    - 5 字段非空(`trim().is_empty()`)
+    - `auth.jwt_secret` ≥ 32 字节
+    - `encryption.field_key` / `hmac_salt_key` 必须正好 64 hex chars
+    - 任一不满足 → anyhow `bail!` panic,错误信息含字段名 + 修复命令(`openssl rand -hex 32`)
+  - 校验顺序:DB URL → Redis URL → JWT → field_key → hmac_salt_key(固定,便于测试断言"first error only")
+- **dev 体验**:`backend/.env.example` 含占位符(格式合法,启动能过),新加 `scripts/dev.sh` / `scripts/dev.ps1` 一键 `cp .env.example .env` + `docker compose up` + `cargo run`
+- **测试**:
+  - 14 个 lib 单元测试 (`config::tests::validate_*`) — 直接构造 `AppConfig` 调 `validate()`
+  - 11 个集成测试 (`tests/config_h53.rs::from_env_*`) — `serial_test` 隔离 env 污染,覆盖"5 字段各自缺失/全缺失/JWT 短/hex 长度错/非 hex/dev 占位通过" 7 种场景
 - **理由**:
   - 攻击面:拿到 GitHub 源码 → 知道 dev DB 密码 → 扫 `localhost:5432` / prod 容器误连 dev
-  - 当前缓解(README 文字提醒 / `deadbeef` 启动警告)只针对 JWT+encryption,**不覆盖 DB URL**
   - 跟 H-59 `KmsKeyStore` stub 的 **fail-closed** 哲学一致——misconfigured prod 应 panic 不是 silent default
-- **dev 体验兜底**:`backend/.env.example` 写完整示例 + `make dev` / `scripts/dev.sh` 自动 cp。开发者一行命令起来,不破体验
 - **关联**:H-59(KmsKeyStore fail-closed),H-13(env 命名),H-12(port 5433)
-- **状态**:**已识别,未修**(本轮只更新 README 把 H-53 写进 Security Notes 警示,代码修法待下一 PR)
+- **状态**:**已修**(H-53 系列提交,2026-08-22)
 
 ---
 

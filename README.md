@@ -14,6 +14,9 @@ supervisor-arena/
 ├── docs/
 │   ├── OUTLINE.md                  # 设计大纲(主参考)
 │   └── DECISIONS.md                # 决策清单(H-1..H-53)
+├── scripts/                        # 跨平台开发脚本
+│   ├── dev.sh                      # Linux/macOS 一键启动
+│   └── dev.ps1                     # Windows PowerShell 一键启动
 ├── backend/                        # Rust 后端
 │   ├── Cargo.toml
 │   ├── docker-compose.yml          # 本地 PG(5433) + Redis
@@ -21,7 +24,7 @@ supervisor-arena/
 │   ├── migrations/                 # 17 个 SQL 迁移
 │   ├── src/
 │   │   ├── main.rs / lib.rs        # 入口
-│   │   ├── config.rs               # 12-factor env 配置
+│   │   ├── config.rs               # 12-factor env 配置 + H-53 fail-closed 校验
 │   │   ├── db.rs                   # deadpool-postgres + 启动迁移
 │   │   ├── observability.rs        # tracing
 │   │   ├── crypto/                 # AES-256-GCM + HMAC + Argon2id + KeyStore trait
@@ -35,7 +38,7 @@ supervisor-arena/
 │   │   ├── rate_limit/             # 评分日上限 + 登录 IP 节流
 │   │   ├── invitation/             # 邀请码注册
 │   │   └── lookup/                 # 学科/学院/维度 i18n 查询
-│   └── tests/                      # 200 个测试(lib + proptest + 集成)
+│   └── tests/                      # 200+ 个测试(lib + proptest + 集成)
 ├── DEPLOYMENT.md                   # 生产部署手册
 ├── RUNBOOK.md                      # 运维手册
 └── README.md
@@ -79,11 +82,15 @@ supervisor-arena/
 git clone git@github.com:Darkhe55/supervisor-arena.git
 cd supervisor-arena
 
-# 后端
+# 一键起 dev 环境(推荐)
+./scripts/dev.sh           # Linux / macOS
+.\scripts\dev.ps1          # Windows PowerShell
+# 脚本会: 拷 .env.example → .env,起 docker compose (PG 5433 + Redis 6379),cargo run
+
+# 手动版
 cd backend
 cp .env.example .env
-# 编辑 .env —— 必填 AUTH__JWT_SECRET / ENCRYPTION__FIELD_KEY / ENCRYPTION__HMAC_SALT_KEY
-docker compose up -d   # PG 在 5433(避 Windows 本地 PG 5432 冲突,见 H-12)
+docker compose up -d
 cargo run
 
 # 健康检查
@@ -93,7 +100,7 @@ curl http://localhost:8080/health
 
 > **Windows 注意**: 本地若有 `postgresql-x64-16` 服务会占 `5432`,docker compose 已映射到 `5433`。`.env` 里 `DATABASE__URL` 必须用 `5433` 不是 `5432`。
 >
-> **PowerShell 注意**: `cargo` / `rustc` 默认不在 PATH,需用 `& "$env:USERPROFILE\.cargo\bin\cargo.exe"`。
+> **PowerShell 注意**: `cargo` / `rustc` 默认不在 PATH,`scripts/dev.ps1` 自动用 `$env:USERPROFILE\.cargo\bin\cargo.exe`。
 
 ## 文档
 
@@ -120,6 +127,7 @@ curl http://localhost:8080/health
 
 ## 安全要点
 
+- ✅ **H-53 fail-closed**:5 个敏感字段(`DATABASE__URL` / `REDIS__URL` / `AUTH__JWT_SECRET` / `ENCRYPTION__FIELD_KEY` / `ENCRYPTION__HMAC_SALT_KEY`)启动时强校验,缺失或格式错直接 panic,不会静默 fallback 到 dev 凭据
 - ⚠ **所有 secrets 走 env**:`AUTH__JWT_SECRET` / `ENCRYPTION__FIELD_KEY` / `ENCRYPTION__HMAC_SALT_KEY`,`backend/.env` 已在 .gitignore
 - ⚠ **M1 dev 用 LocalKeyStore**:M6+ 必须在生产接 KMS(见 H-59 KeyStore trait),KmsKeyStore stub 启动会 fail-closed
 - ⚠ **PII 列全部加密**:`email_enc` / `email_hash` / `submitted_name_enc` / `ip_hash` 等(见 migrations)

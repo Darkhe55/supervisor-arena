@@ -31,56 +31,67 @@ M3 + M5 + M6(部分)后端 100% 完成,200/200 测试通过。
 
 ## Quick Start
 
-### 1. 装依赖
+### 一键起 dev 环境
 
 ```bash
-# Rust 1.75+
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-# Windows PowerShell:cargo 不在 PATH,用
-#   & "$env:USERPROFILE\.cargo\bin\cargo.exe"
+# Linux / macOS
+./scripts/dev.sh
+
+# Windows PowerShell
+.\scripts\dev.ps1
 ```
 
-### 2. 起 PG + Redis
+这个脚本会:
+1. 把 `backend/.env.example` 拷到 `backend/.env`(已存在则跳过)
+2. 拉起 docker compose(PG 5433 + Redis 6379)
+3. `cargo run`(启动自动跑 17 个 migrations)
+
+### 手动版
+
+如果不用脚本,等效步骤:
 
 ```bash
+# 1. 装 Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# Windows: cargo 默认不在 PATH,用
+#   & "$env:USERPROFILE\.cargo\bin\cargo.exe"
+
+# 2. 起 PG + Redis
+cd backend
 cp .env.example .env
 docker compose up -d
-```
+# PostgreSQL → localhost:5433(H-12:避 Windows 本地 PG 16 冲突)
+# Redis → localhost:6379
+# 默认 dev 凭据: supervisor / supervisor_dev_pwd
 
-- PostgreSQL → `localhost:5433`(不是 5432 — 避 Windows 本地 PG 16 冲突,见 H-12)
-- Redis → `localhost:6379`
-- 默认用户: `supervisor / supervisor_dev_pwd`(dev only)
-
-### 3. 生成 dev secrets
-
-```bash
-# PowerShell:
-$env:AUTH__JWT_SECRET = -join ((1..64) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
-$env:ENCRYPTION__FIELD_KEY = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
-$env:ENCRYPTION__HMAC_SALT_KEY = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
-# bash:
-# export AUTH__JWT_SECRET=$(openssl rand -hex 32)
-# export ENCRYPTION__FIELD_KEY=$(openssl rand -hex 32)
-# export ENCRYPTION__HMAC_SALT_KEY=$(openssl rand -hex 32)
-```
-
-写入 `.env`。**env 变量名用 `__` 双下划线**(`AUTH__JWT_SECRET` 不是 `AUTH_JWT_SECRET`),H-13 锁定。
-
-> **⚠ H-53 待办**:`config.rs::set_default("database.url", ...)` 当前给 dev 凭据做了 fallback,生产忘设 env 不会报错。修法是去掉 `set_default`,启动时强制要求 env 提供。dev 体验用 `.env.example` 兜住。
-
-### 4. Build + run
-
-```bash
+# 3. 启动(自动跑 migrations)
 cargo run
-# 启动自动跑 migrations(17 个),无需手动 `sqlx migrate run`
 ```
 
-### 5. 验证
+### 4. 验证
 
 ```bash
 curl http://localhost:8080/health
 # {"status":"ok"}
 ```
+
+### 生产环境 secrets
+
+`.env.example` 里的 dev 占位符(`replace_with_...` / `deadbeef...`)只是为了让 `cargo run` 一键起来。生产环境必须换成真随机值:
+
+```bash
+# PowerShell
+$env:AUTH__JWT_SECRET = -join ((1..64) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
+$env:ENCRYPTION__FIELD_KEY = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
+$env:ENCRYPTION__HMAC_SALT_KEY = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
+
+# bash
+export AUTH__JWT_SECRET=$(openssl rand -hex 64)
+export ENCRYPTION__FIELD_KEY=$(openssl rand -hex 32)
+export ENCRYPTION__HMAC_SALT_KEY=$(openssl rand -hex 32)
+```
+
+**env 变量名用 `__` 双下划线**(`AUTH__JWT_SECRET` 不是 `AUTH_JWT_SECRET`),H-13 锁定。**5 个敏感字段(DATABASE__URL / REDIS__URL / AUTH__JWT_SECRET / ENCRYPTION__FIELD_KEY / ENCRYPTION__HMAC_SALT_KEY)有 fail-closed 校验**——缺失或格式错(hex 长度、URL 空)直接 panic,见 H-53。
 
 ## Project Layout
 
@@ -131,7 +142,7 @@ backend/
 ## Security Notes
 
 - ⚠ **Never commit `.env`** — gitignore line 72 已加
-- ⚠ **Dev defaults fail open** — `config.rs::set_default` 当前给 dev 凭据做 fallback,生产忘设 env 不会报错(**H-53 待修**)
+- ✅ **H-53 fail-closed**:5 个敏感字段(`DATABASE__URL` / `REDIS__URL` / `AUTH__JWT_SECRET` / `ENCRYPTION__FIELD_KEY` / `ENCRYPTION__HMAC_SALT_KEY`)启动时强校验,缺失或格式错(空 / JWT < 32 字节 / hex 长度 ≠ 64)直接 panic,不会"静默 fallback 到 dev 凭据"
 - ⚠ **M1-M3 用 LocalKeyStore** — 真实 key bytes 驻在进程内存;生产 **必须** 改用 KmsKeyStore(H-59)
 - ⚠ **PII 列全部加密** — `email_enc` / `email_hash` / `submitted_name_enc` / `ip_hash` / `user_agent_hash`(见 migrations)
 - ⚠ **审计可追溯** — `encryption_audit_log` 覆盖 8 个调用点(注册/登录/me/取消/举报/投票/supervisor 创建/邀请)
